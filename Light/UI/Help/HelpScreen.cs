@@ -54,84 +54,64 @@ public static class HelpScreen
     // =====================================================================
 
     /// <summary>
-    /// 窗口尺寸。用户 2026-10-06："越改越丑" —— 一路加宽是错的 ✗：
-    /// 本模组一共就 5 个职业，窗口越宽中间越空。**窗口要跟着内容走**：
-    ///   7.4 宽 = 网格(5.95) + 两侧各 0.72 留白；3.6 高 = 页签 + 标题 + 4 行网格 + 翻页栏。
+    /// 窗口尺寸（用户 2026-10-06："窗口小一点（参考 Nebula 的尺寸）整体小一点"）。
+    /// Nebula 自己的 Help 菜单就是 7.8 宽 → 这里 7.8 × 4.7。
     /// </summary>
-    private static readonly Vector2 HelpSize = new(7.4f, 3.6f);
+    private static readonly Vector2 HelpSize = new(7.8f, 4.7f);
 
     // ─────────────────────────────────────────────────────────────────────
-    // 字号一律照 Nebula 的属性表（NebulaPluginNova/Modules/MetaWidget/GUIWidget.cs）
-    //
-    //   DocumentTitle   = 2.2   DocumentSubtitle2 = 1.6   DocumentStandard = 1.2
-    //   OverlayTitle    = 1.8   OverlayContent    = 1.5
-    //   MetaRoleButton  = 1.8 字 / 1.4×0.26 框        OptionsButtonLonger = 1.8 / 1.8×0.22
-    //
-    //   ★ Nebula 的观感 = **扁按钮 + 大字**：字号约是按钮高度的 6~7 倍，
-    //     交给 TMP 的 autoSizing（FontMin/FontMax）把字压进框里，所以字看起来是"顶满"的。
-    //     我们之前是"厚按钮 + 小字"，所以怎么调都觉得字号不对。
-    //   ★ 但本工程不用 autoSizing（AGENTS §12.2：开着它 fontSize 完全无效，没法用常量调），
-    //     所以这里直接写**能顶满按钮的字号**，效果等价且可调。
+    // 字号：套**配置项 UI 那套**（简中字体 MenuTextTemplate2 + Bold，见 ApplyConfigTextStyle），
+    //       尺寸参考 Nebula 的 Help 菜单（页签 1.02×0.34、职业按钮 1.42×0.38、扁按钮 + 顶满的字）。
     // ─────────────────────────────────────────────────────────────────────
 
-    /// <summary>顶部页签按钮（Nebula: Size(0.82,0.21) + FontSize 1.6）。</summary>
-    private const float TabBtnW = 0.86f;
-    private const float TabBtnH = 0.22f;
+    /// <summary>顶部页签按钮。</summary>
+    private const float TabBtnW = 1.02f;
+    private const float TabBtnH = 0.34f;
     private const float TabGap = 0.05f;
-    private const float TabRowY = 1.32f;
-    private const float TabFontSize = 1.50f;
+    private const float TabRowY = 1.82f;
+    private const float TabFontSize = 1.28f;
 
-    /// <summary>页面标题（Nebula: AttributeAsset.DocumentTitle = 2.2），居中。</summary>
-    private const float HeaderY = 0.92f;
-    private const float HeaderFontSize = 2.20f;
+    /// <summary>页面标题（居中）。</summary>
+    private const float HeaderY = 1.48f;
+    private const float HeaderFontSize = 1.70f;
 
-    /// <summary>分类标题（Nebula: DocumentSubtitle2 = 1.6），**左对齐到网格左边**。</summary>
-    private const float SectionFontSize = 1.60f;
+    /// <summary>分类标题（内鬼/中立/船员，居中）。</summary>
+    private const float SectionFontSize = 1.55f;
 
-    /// <summary>正文（Nebula: DocumentStandard = 1.2）。</summary>
-    private const float BodyFontSize = 1.20f;
+    /// <summary>正文。</summary>
+    private const float BodyFontSize = 1.22f;
 
     /// <summary>内容流水从顶部让开多少（页签栏的高度 + 余量）。</summary>
-    private const float ContentTopMargin = 0.55f;
+    private const float ContentTopMargin = 0.62f;
 
-    /// <summary>
-    /// 职业网格（Nebula: MetaRoleButton = 1.4×0.26 框 + 1.8 字）。
-    /// ★ **固定原点、左对齐**（不是每行居中）—— 每行居中会让"只有 2 个按钮"的那行飘在窗口正中间、
-    ///   两侧一大片空，这就是上一版最难看的地方。
-    /// </summary>
+    /// <summary>职业网格（**每行按内容居中**）。</summary>
     private const float RoleBtnW = 1.42f;
-    private const float RoleBtnH = 0.28f;
+    private const float RoleBtnH = 0.38f;
     private const float RoleGapX = 0.09f;
-    private const float RoleGapY = 0.10f;
+    private const float RoleGapY = 0.08f;
     private const int RoleColumns = 4;
-    private const int RowsPerPage = 4;               // 1 分类标题行 + 3 职业行
-    private const float GridTopY = 0.50f;
-    private const float RoleFontSize = 1.55f;
+    private const int RowsPerPage = 6;               // 1 分类标题行 + 5 职业行
+    private const float GridTopY = 0.98f;
+    private const float RoleFontSize = 1.20f;
 
-    /// <summary>网格总宽 —— 分类标题的矩形宽度照它，标题才能和按钮左边对齐。</summary>
-    private const float GridWidth = RoleColumns * RoleBtnW + (RoleColumns - 1) * RoleGapX;
+    /// <summary>底部翻页按钮。</summary>
+    private const float PagerBtnW = 1.40f;
+    private const float PagerBtnH = 0.34f;
+    private const float PagerY = -1.98f;
+    private const float PagerFontSize = 1.22f;
 
-    /// <summary>底部翻页按钮（Nebula: OptionsButtonLonger = 1.8×0.22 框 + 1.8 字）。</summary>
-    private const float PagerBtnW = 1.30f;
-    private const float PagerBtnH = 0.24f;
-    private const float PagerY = -1.42f;
-    private const float PagerFontSize = 1.55f;
-
-    /// <summary>纯文字页：两栏（左栏填满再填右栏），每栏行数与行距。</summary>
-    private const int TextColumns = 2;
-    private const int TextPageLines = 5;             // 每栏 5 行 → 每页 10 行
+    /// <summary>纯文字页每页行数（设置/概览）与行距。</summary>
+    private const int TextPageLines = 8;
     private const float LineStepY = 0.30f;
-    private const float LineFontSize = 1.20f;
-    private const float ColumnWidth = 3.20f;
-    private const float ColumnX = 1.75f;
+    private const float LineFontSize = 1.22f;
 
-    /// <summary>详情窗口（Nebula: OverlayTitle = 1.8 / OverlayContent = 1.5）。</summary>
-    private static readonly Vector2 DetailSize = new(6.8f, 4.0f);
+    /// <summary>详情窗口。</summary>
+    private static readonly Vector2 DetailSize = new(6.4f, 5.0f);
     private const float DetailTitleFontSize = 1.80f;
-    private const float DetailBodyFontSize = 1.35f;
+    private const float DetailBodyFontSize = 1.20f;
     private const float PortraitSize = 0.50f;
-    private const float PortraitY = 1.30f;
-    private const float DetailCloseY = -1.62f;
+    private const float PortraitY = 1.60f;
+    private const float DetailCloseY = -2.15f;
 
     /// <summary>排序（HudUI 窗口默认会被 HUD 压住，建完内容后要抬到很大）。</summary>
     private const int BaseOrder = 30000;
@@ -531,23 +511,19 @@ public static class HelpScreen
             $"{Language.Translate("help.tabs.roles", "职业")} · {_page + 1}/{pages}",
             HeaderFontSize, HeaderY);
 
-        // 网格左边（第一列按钮中心）+ 分类标题的矩形（左边与网格对齐、宽度=网格宽）
-        float gridLeft = -GridWidth * 0.5f + RoleBtnW * 0.5f;
-        float headerRectX = -GridWidth * 0.5f + GridWidth * 0.5f;    // = 0，矩形居中 → 左边缘正好落在网格左边
-
         float y = GridTopY;
         foreach (var row in rows.Skip(_page * RowsPerPage).Take(RowsPerPage))
         {
             if (row.Header != null)
             {
-                AddFixedText(win, Colorize(row.Header, row.HeaderColor), SectionFontSize, y,
-                    TextAlignmentOptions.Left, headerRectX, GridWidth);
-                y -= 0.34f;
+                AddFixedText(win, Colorize(row.Header, row.HeaderColor), SectionFontSize, y);
+                y -= 0.30f;
                 continue;
             }
 
-            // ★ 左对齐固定原点：每行都从网格最左边开始排，不再按行内容居中
-            float x = gridLeft;
+            // 每行按本行按钮数**居中**
+            float total = row.Roles.Count * RoleBtnW + Math.Max(0, row.Roles.Count - 1) * RoleGapX;
+            float x = -total * 0.5f + RoleBtnW * 0.5f;
             foreach (var role in row.Roles)
             {
                 var local = role;
@@ -636,13 +612,13 @@ public static class HelpScreen
             return;
         }
 
-        // 分页（每页 = 4 列 × 3 行；每页条数是列数的整数倍，所以下面用全局索引取模也能算出行列）
-        int perPage = RoleColumns * 3;
+        // 分页（每页 4 列 × 4 行；每页条数是列数的整数倍，所以下面用全局索引取模也能算出行列）
+        int perPage = RoleColumns * 4;
         int pages = Math.Max(1, (matched.Count + perPage - 1) / perPage);
         _page = Math.Clamp(_page, 0, pages - 1);
 
-        float top = GridTopY - 0.46f;
-        float gridLeft = -GridWidth * 0.5f + RoleBtnW * 0.5f;
+        float top = GridTopY - 0.52f;
+        float gridLeft = -(RoleColumns * RoleBtnW + (RoleColumns - 1) * RoleGapX) * 0.5f + RoleBtnW * 0.5f;
         foreach (var role in matched.Skip(_page * perPage).Take(perPage))
         {
             var local = role;
@@ -690,22 +666,16 @@ public static class HelpScreen
             foreach (var role in s.Roles) lines.Add((GetAllocationLine(role), false, s.Color));
         }
 
-        int perPage = TextPageLines * TextColumns;
-        int pages = Math.Max(1, (lines.Count + perPage - 1) / perPage);
+        int pages = Math.Max(1, (lines.Count + TextPageLines - 1) / TextPageLines);
         _page = Math.Clamp(_page, 0, pages - 1);
 
-        var slice = lines.Skip(_page * perPage).Take(perPage).ToList();
         float top = GridTopY - 0.20f;                // 概览页多一行"当前玩家数"，正文整体下移一点
-        for (int i = 0; i < slice.Count; i++)
+        float y = top;
+        foreach (var line in lines.Skip(_page * TextPageLines).Take(TextPageLines))
         {
-            int col = i / TextPageLines;             // 先填满左栏，再填右栏
-            int row = i % TextPageLines;
-            float x = col == 0 ? -ColumnX : ColumnX;
-
-            var line = slice[i];
             AddFixedText(win, line.IsHeader ? Colorize(line.Text, line.Color) : line.Text,
-                line.IsHeader ? SectionFontSize : LineFontSize,
-                top - row * LineStepY, TextAlignmentOptions.Left, x, ColumnWidth);
+                line.IsHeader ? SectionFontSize : LineFontSize, y, TextAlignmentOptions.Left);
+            y -= LineStepY;
         }
 
         AddPager(win, pages, p => { _page = p; BuildContent(); });
@@ -788,19 +758,14 @@ public static class HelpScreen
             return;
         }
 
-        int perPage = TextPageLines * TextColumns;
-        int pages = Math.Max(1, (lines.Count + perPage - 1) / perPage);
+        int pages = Math.Max(1, (lines.Count + TextPageLines - 1) / TextPageLines);
         _page = Math.Clamp(_page, 0, pages - 1);
 
-        var slice = lines.Skip(_page * perPage).Take(perPage).ToList();
-        for (int i = 0; i < slice.Count; i++)
+        float y = GridTopY;
+        foreach (var line in lines.Skip(_page * TextPageLines).Take(TextPageLines))
         {
-            int col = i / TextPageLines;
-            int row = i % TextPageLines;
-            float x = col == 0 ? -ColumnX : ColumnX;
-
-            AddFixedText(win, slice[i], LineFontSize, GridTopY - row * LineStepY,
-                TextAlignmentOptions.Left, x, ColumnWidth);
+            AddFixedText(win, line, LineFontSize, y, TextAlignmentOptions.Left);
+            y -= LineStepY;
         }
 
         AddPager(win, pages, p => { _page = p; BuildContent(); });
