@@ -132,7 +132,7 @@ public static class MainMenuPatch
             _lightScreen = null;
             _lightSubScreen = null;
             _bgPanel = null;
-            LightLogger.LogWarning("[Light.UI] === 开始布局 ===");
+            LightLogger.LogWarning("开始布局");
 
             VanillaAsset.Preload();
             var modStamp = FindGO("ModStamp");
@@ -143,12 +143,10 @@ public static class MainMenuPatch
                 var sr = modStamp.GetComponent<SpriteRenderer>();
                 sr?.sprite = ResourceHelper.LoadSpriteFromResource("Light.Resources.ModStamp.png");
             }
-            // 背景上移动画只在"首次进入主菜单"执行一次；之后进入不再上移
             _bgMoved = _bgInitialMoveDone;
             _bgMoveDelay = 0f;
-            // BackgroundTexture（会移动上去的那个）只在首次进入主菜单出现；之后再次进入直接不显示、不移动
             var bg = FindGO("BackgroundTexture");
-            if (bg != null) bg.SetActive(!_bgInitialMoveDone);
+            bg?.SetActive(!_bgInitialMoveDone);
 
             var btns = FindButtons();
 
@@ -259,7 +257,7 @@ public static class MainMenuPatch
 
             LightLogger.LogWarning("[Light.UI] === 布局完成 ===");
 
-            // 制作人员/退出：在“LIGHT”下方一个间距处对齐（LIGHT 已占据“设置”下方一格）
+            // 制作人员/退出
             if (btns.TryGetValue("LightButton", out var lBtn) && lBtn != null &&
                 btns.TryGetValue("AcountButton", out var aBtn) && aBtn != null &&
                 btns.TryGetValue("CreditsButton", out var cBtn) && cBtn != null)
@@ -284,7 +282,7 @@ public static class MainMenuPatch
                 __instance.StartCoroutine(CoCheckUpdater().WrapToIl2Cpp());
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             LightLogger.LogWarning("[Light.UI] 异常: " + ex);
         }
@@ -297,8 +295,6 @@ public static class MainMenuPatch
         yield return null;
         try
         {
-            // ⚠️ 更新器统一放在 <游戏根目录>\Light_Data\Tools（见 LightToolManager），
-            //    不再是游戏根目录。正常启动时加载页会把缺失的那个自动下载下来。
             string updaterPath = VersionMaker.UpdaterExePath;
             if (!File.Exists(updaterPath))
             {
@@ -514,11 +510,6 @@ public static class MainMenuPatch
     }
 
 #if !DEBUG
-    /// <summary>
-    /// Release 构建专用：「练习模式」(FreePlay) 与「玩法说明」(HowToPlay) 原本左右并列，
-    /// 这里把练习模式整个去掉，并把玩法说明挪到两者原来的中点，保持居中。
-    /// （Debug 构建保留原样，方便开发时用练习模式。）
-    /// </summary>
     private static void RemoveFreePlayAndCenterHowToPlay(MainMenuManager __instance)
     {
         try
@@ -600,21 +591,9 @@ public static class MainMenuPatch
         EnforceHowToPlayX("每帧");
     }
 
-    // ── 永久屏蔽主菜单的 EjectButtonMenu（原版那个"弹射"按钮）─────────────────
     private static GameObject? _ejectMenu;
     private static bool _ejectMenuLoggedHide;
 
-    /// <summary>
-    /// 一出现就立刻关掉 <c>MainMenuManager/MainUI/AspectScaler/EjectButtonMenu</c>。
-    ///
-    /// 为什么用"每帧检查"而不是"延迟隐藏"：要求是**一出现就关、永远不想看见**。
-    /// 原版至少有 3 条路径把它 SetActive(true)（MainMenuManager.Awake / ActivateMainMenuUI /
-    /// EjectMainMenu 协程里翻 ejectButton），只堵一条必漏；而 LateUpdate 在**渲染之前**执行，
-    /// 所以在这里关掉，它连一帧都不会被画出来。
-    ///
-    /// 只关 GameObject，不动 EjectMainMenu 组件 —— 原版是先 SetActive(true) 再调 StartEjectButton()，
-    /// 我们同帧关掉只会让协程随之中止，不会出现在 inactive 对象上 StartCoroutine 的报错。
-    /// </summary>
     [HarmonyPatch(typeof(MainMenuManager), "LateUpdate")]
     [HarmonyPostfix]
     public static void SuppressEjectMenu_Postfix(MainMenuManager __instance)
@@ -703,18 +682,11 @@ public static class MainMenuPatch
             var child4 = GetChild(_lightScreen.transform, 4);
             if (child4 != null) Object.Destroy(child4.gameObject);
 
-            // ⚠️ 兜底隐藏「兑换奖励」。
-            //    上面按**子物体序号 4** 找它，但序号会随预制体结构调整而错位（越界时
-            //    GetChild 返回 null，两个 `?.` / `if` 保护会**静默跳过**）。
-            //    实测它仍然显示出来，而且和我们新加的「更换背景图」叠在一起
-            //    （用户看到的就是三个按钮互相压）。
-            //    这里按**文字**再兜一次（后面还有按"是不是我建的"兜底，见 HideExtraButtons）。
             HideButtonByText(_lightScreen, "兑换");
 
             var temp = GetChild(_lightScreen.transform, 3);
             if (temp == null) return;
             int index = 0;
-            // 记录我们自己创建的按钮，等下用它把预制体自带的杂项按钮摘掉
             var mine = new List<GameObject>();
 
             void SetUpBtn(string text, System.Action clickAction)
@@ -747,9 +719,6 @@ public static class MainMenuPatch
             SetUpBtn("关于模组", () => HelpScreen.TryOpenHelpScreen());
             SetUpBtn("成就", () => LightLogger.LogWarning("[Light] 成就 - 待实现"));
             SetUpBtn("Discord", () => Application.OpenURL("https://discord.gg/"));
-
-            // 【新增】更换背景图 —— 打开模态面板（用户要求：Light 主界面变成 6 个按钮）
-            // 2 列布局下 index 4/5 正好是第三排的两个，不会多出一行。
             SetUpBtn("更换背景图", () =>
             {
                 if (_lightScreen != null) _lightScreen.SetActive(false);
@@ -762,11 +731,6 @@ public static class MainMenuPatch
                 if (_lightSubScreen != null) _lightSubScreen.SetActive(true);
             });
 
-            // ⚠️ 最后兜一刀：把这个克隆面板里**所有不是我们建的**按钮全部藏掉。
-            //    为什么不靠子物体序号：序号会错位，而且越界时 GetChild 返回 null、
-            //    外面那几层空引用保护会**静默跳过** → 那个「兑换奖励」就留在界面上，
-            //    跟我们新加的「更换背景图」「更多功能」互相叠压（用户实际看到的现象）。
-            //    "凡不是我建的就关掉"不依赖任何序号/文字，最稳。
             HideExtraButtons(_lightScreen, mine);
 
             var scalerList = Object.FindObjectOfType<SlicedAspectScaler>();
@@ -782,16 +746,6 @@ public static class MainMenuPatch
         }
     }
 
-    /// <summary>
-    /// 把这个克隆面板里**所有不是我们建的**按钮藏掉。
-    ///
-    /// 背景：LightScreen 是从原版 <c>accountButtons</c> 克隆的，预制体自带若干按钮
-    /// （其中一个叫「兑换奖励」）。原代码靠 <c>GetChild(transform, 4)</c> 定位并销毁它，
-    /// 但**子物体序号会错位**，越界时 <c>GetChild</c> 返回 null，外面两层空引用保护
-    /// 会静默跳过 → 那个按钮留在界面上，和新加的按钮叠在一起。
-    ///
-    /// 这里改成"**凡不是我建的就关掉**"，不依赖序号也不依赖文字。
-    /// </summary>
     private static void HideExtraButtons(GameObject root, List<GameObject> mine)
     {
         try
@@ -815,11 +769,7 @@ public static class MainMenuPatch
 
                 go.SetActive(false);
                 hidden++;
-                LightLogger.Log($"[Light] 已隐藏 LightScreen 里多余的按钮：{go.name}" +
-                                (string.IsNullOrEmpty(label) ? "" : $"（文字「{label}」）"));
             }
-            if (hidden > 0)
-                LightLogger.Log($"[Light] 共隐藏 {hidden} 个多余按钮（保留自建 {mine.Count} 个）");
         }
         catch (Exception ex)
         {

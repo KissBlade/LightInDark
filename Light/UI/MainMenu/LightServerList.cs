@@ -162,7 +162,7 @@ namespace Light.UI.MainMenu
                             new[] { new ServerInfo(e.Name, e.Ip, e.Port, e.UseDtls) })).Cast<IRegionInfo>();
 
                     _builtIn.Add(region);
-                    LightLogger.Log($"[LightServerList] 已准备自带服务器：{e.Name} → {e.Ip}:{e.Port} (dtls={e.UseDtls})");
+                    LightLogger.Log($"[LightServerList] 已准备自带服务器：{e.Name} {e.Ip}:{e.Port}");
                 }
             }
             catch (Exception ex)
@@ -207,15 +207,9 @@ namespace Light.UI.MainMenu
 
                 if (merged.Count == 0)
                 {
-                    // ⚠️ 兜底：一个私服都没有、自带服务器也没配
-                    //    → 宁可显示官服，也不能让下拉框空掉
                     if (!_loggedFallback)
                     {
                         _loggedFallback = true;
-                        LightLogger.LogWarning(
-                            "[LightServerList] 过滤官服后没有任何可用区域（用户没配私服、也没配自带服务器），" +
-                            "**已回退为显示全部区域** —— 否则在线功能会整个不可用。\n" +
-                            "  想彻底屏蔽官服，请在 LightServerList.BuiltInServers 里填至少一个服务器地址。");
                     }
                     return all;
                 }
@@ -224,9 +218,6 @@ namespace Light.UI.MainMenu
                 {
                     _loggedList = true;
                     var names = string.Join(", ", merged.Take(14).Select(r => r?.Name ?? "?"));
-                    LightLogger.Log($"[LightServerList] 下拉框列表：官方 {all.Count} 个（已屏蔽）· " +
-                                    $"自带 {builtIn.Count} 个 · 你的私服 {merged.Count - builtIn.Count} 个\n" +
-                                    $"  共列出 {merged.Count} 个：{names}");
                 }
 
                 return merged;

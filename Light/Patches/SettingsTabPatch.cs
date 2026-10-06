@@ -103,24 +103,20 @@ public static class SettingsTabPatch
         try
         {
             _menu = __instance;
-            DetailPopup.Reset();      // 新菜单：清掉上一次的 detail 状态（含 Tab 固定）
+            DetailPopup.Reset();
 
             var tabs = new List<TabGroup>(__instance.Tabs.ToArray());
             if (tabs.Count == 0)
             {
-                LightLogger.LogWarning("[SettingsTabPatch] 原版设置没有页签，跳过 Light 页签");
                 return;
             }
 
-            // ① 行模板：原版设置里已有的 ToggleButtonBehaviour
             _rowTemplate = FindRowTemplate(tabs);
             if (_rowTemplate == null)
             {
-                LightLogger.LogWarning("[SettingsTabPatch] 找不到原版设置行模板(ToggleButtonBehaviour)，跳过 Light 页签（宁可不做，也不建一堆看不见的裸物体）");
                 return;
             }
 
-            // 顺手把原版页签打一份日志（位置对不上时按这个调）
             for (int i = 0; i < tabs.Count; i++)
             {
                 var t = tabs[i];
@@ -129,11 +125,8 @@ public static class SettingsTabPatch
                 LightLogger.Log($"[SettingsTabPatch] 原版页签[{i}] {t.gameObject.name} pos=({tp.x:F2},{tp.y:F2},{tp.z:F2}) content={(t.Content != null ? t.Content.name : "null")}");
             }
 
-            // ② 行引用清零（容器按菜单实例复用，见下）
             _rows.Clear();
 
-            // ③ 内容容器：**每个设置菜单各一个**。场景里可能同时存在"设置菜单"和"大厅设置菜单"，
-            //    两者都会走这个 Postfix —— 所以在各自菜单下按名字查找/复用，绝不 Destroy 别人的容器。
             var existingContent = __instance.transform.FindChild("LightTabContent");
             if (existingContent != null)
             {
@@ -148,24 +141,16 @@ public static class SettingsTabPatch
                 _lightTabContent.SetActive(false);
             }
 
-            // ④ 页签按钮：**复用最后一个页签槽位**（它的位置一定在页签行内，不会跑到面板外）。
-            // 注意：被替换掉的那一项虽然 GameObject 还在，但已经不在 Tabs 数组里，
-            // 原版 OpenTabGroup 再也不会 Close() 它 —— 必须手动把它的内容面板关掉，
-            // 否则就是用户看到的"很多界面叠在一起"。
             int slot = tabs.Count - 1;
             var replaced = tabs[slot];
             if (replaced != null)
             {
-                // 内容面板要关（它已不在 Tabs 里，原版再也不会 Close 它）
                 if (replaced.Content != null)
                 {
                     replaced.Content.SetActive(false);
-                    LightLogger.Log($"[SettingsTabPatch] 已关掉被替换页签 {replaced.gameObject.name} 的内容面板 {replaced.Content.name}");
                 }
 
-                // 按钮本体也要关：否则它和我们的 Light 页签会重叠在同一格上
                 replaced.gameObject.SetActive(false);
-                LightLogger.Log($"[SettingsTabPatch] 已隐藏被替换页签按钮 {replaced.gameObject.name}（让出第 {slot} 槽位给 Light）");
             }
 
             var slotParent = replaced != null ? replaced.transform.parent : tabs[0].transform.parent;
@@ -173,33 +158,26 @@ public static class SettingsTabPatch
             tabButton.name = "LightTabButton";
             tabButton.transform.localScale = Vector3.one;
 
-            // ⚠️ 关键：原版页签位置是 AspectPosition 按屏幕比例算出来的
-            //（日志实证：两个设置菜单里同排页签的坐标完全不同）。
-            // 不禁用它，我们设的位置下一帧就被拉回"克隆来源"的锚点 → Light 落到 Graphics 上面 → 重叠。
             DisableAspectPosition(tabButton.transform);
 
             if (replaced != null)
             {
-                tabButton.transform.localPosition = replaced.transform.localPosition;   // 先用被替换槽位的位置，稍后统一重排
+                tabButton.transform.localPosition = replaced.transform.localPosition;
             }
             SetTabLabel(tabButton, "Light");
 
             var lightTab = tabButton.GetComponent<TabGroup>();
             if (lightTab == null)
             {
-                LightLogger.LogWarning("[SettingsTabPatch] 克隆出来的页签没有 TabGroup，跳过");
                 Object.Destroy(tabButton);
                 return;
             }
             lightTab.Content = _lightTabContent;
 
-            // 替换数组里的这一项（其余原版页签位置/索引都不动）
             tabs[slot] = lightTab;
             __instance.Tabs = new Il2CppReferenceArray<TabGroup>(tabs.ToArray());
             _lightTabIndex = slot;
 
-            // 页签行重排：照 Nebula 的做法（间距 1.7 / ≥5 项时 1.62），但要**把我们的页签一起排**，
-            // 否则新页签会停在克隆来的坐标上、和原版页签重叠（上一版就是这个毛病）。
             LayoutTabRow(tabs, tabButton.transform);
 
             var pb = tabButton.GetComponent<PassiveButton>();
@@ -213,13 +191,8 @@ public static class SettingsTabPatch
                 }));
             }
 
-            LightLogger.Log($"[SettingsTabPatch] Light 页签占用第 {_lightTabIndex} 槽位（共 {tabs.Count} 项），位置 {tabButton.transform.localPosition}，行模板={_rowTemplate.name}");
-
-            // ⑤ 按已注册的设置项建行（真正的设置项由外部调用 AddXxxButton 注册，见文件顶部说明）
             RebuildButtons();
 
-            // ⑥ 通知订阅者同步显示值（例如 LightOptionsRegistry 把"启动较早、还没初始化"的值补齐，
-            //    比如光标索引 —— 它在 LightPlugin.Load 里注册时还没 Initialize）
             RaiseLightTabOpened();
         }
         catch (Exception ex)
@@ -228,7 +201,6 @@ public static class SettingsTabPatch
         }
     }
 
-    /// <summary>触发 <see cref="LightTabOpened"/>，回调异常不影响主流程。</summary>
     private static void RaiseLightTabOpened()
     {
         try
@@ -241,10 +213,6 @@ public static class SettingsTabPatch
         }
     }
 
-    // ════════════════════════════════════════════
-    //  公共方法（给以后真正的设置项用）
-    // ════════════════════════════════════════════
-
     public static LightOptionButton AddToggleButton(string label, bool initialValue, Action<bool> onToggle, string? detail = null)
     {
         var btn = new LightOptionButton(label, initialValue ? "启用" : "禁用") { IsOn = initialValue, Detail = detail };
@@ -252,7 +220,7 @@ public static class SettingsTabPatch
         {
             btn.IsOn = !btn.IsOn;
             btn.ValueText = btn.IsOn ? "启用" : "禁用";
-            RebuildButtons();          // 先刷新显示，再回调（回调里可能再改值）
+            RebuildButtons();
             onToggle?.Invoke(btn.IsOn);
         };
         _buttons.Add(btn);
@@ -262,7 +230,6 @@ public static class SettingsTabPatch
 
     public static LightOptionButton AddSelectorButton(string label, string[] options, int initialIndex, Action<int> onSelect, string? detail = null)
     {
-        // 防御：选项为空 / 初值越界时不要直接 options[initialIndex]（会抛异常）
         if (options == null || options.Length == 0)
         {
             LightLogger.LogWarning($"[SettingsTabPatch.AddSelectorButton]「{label}」没有选项，已忽略该设置项");
@@ -319,11 +286,6 @@ public static class SettingsTabPatch
         return btn;
     }
 
-    /// <summary>
-    /// 按当前设置项数据重建 Light 页签里的所有行。
-    /// 用在"别处改了值、需要刷新显示"的场合（例如重载配置、恢复默认）。
-    /// 平时点击行自己就会刷新，不需要调用。
-    /// </summary>
     public static void Refresh() => RebuildButtons();
 
     private static void RebuildIfVisible()
@@ -331,20 +293,6 @@ public static class SettingsTabPatch
         if (_lightTabContent != null && _lightTabContent.activeSelf) RebuildButtons();
     }
 
-    // ════════════════════════════════════════════
-    //  页签 / 设置行 构建
-    // ════════════════════════════════════════════
-
-    /// <summary>
-    /// 把 Light 页签排进"行内等距的那一组"，避免重叠。
-    ///
-    /// 依据实测数据（两个设置菜单的日志）：
-    ///   设置菜单    : General -1.70 / Graphics 0.00 / Data 1.70 / Help 2.39  → 间距 1.70,1.70,0.69
-    ///   大厅设置菜单: General -1.00 / Graphics 1.00 / Help 1.66              → 间距 2.00,0.66
-    /// 可见原版有一组"等距页签"，另有一个靠右的独立按钮（Help），间距明显更小。
-    /// 所以这里取"最大相邻间距"为基准，只把间距接近基准的项算作同一组（Help 被排除、不参与重排），
-    /// 然后把「组内页签 + Light」围绕组中心等距排布；总宽最多比原组宽一个间距（超了就压紧）。
-    /// </summary>
     private static void LayoutTabRow(List<TabGroup> tabs, Transform newTab)
     {
         try
@@ -408,7 +356,6 @@ public static class SettingsTabPatch
                 ordered[i].localPosition = new Vector3(startX + spacing * i, rowY, rowZ);
             }
 
-            LightLogger.Log($"[SettingsTabPatch] 页签重排：等距组 {group.Count} 项 + Light，基准间距 {baseSpacing:F2} → 实排 {spacing:F2}，x {startX:F2}..{startX + totalWidth:F2}（组原范围 {minX:F2}..{maxX:F2}，同排共 {sameRow.Count} 项）");
         }
         catch (Exception ex)
         {
@@ -432,7 +379,6 @@ public static class SettingsTabPatch
                 if (ap == null || !ap.enabled) continue;
 
                 ap.enabled = false;
-                LightLogger.Log($"[SettingsTabPatch] 已禁用 {cur.name} 上的 AspectPosition（否则页签位置会被改回去）");
             }
         }
         catch (Exception ex)
@@ -449,7 +395,7 @@ public static class SettingsTabPatch
             if (tmp == null) return;
 
             var tr = tmp.GetComponent<TextTranslatorTMP>();
-            if (tr != null) tr.enabled = false;      // 别让翻译器把 "Light" 换掉
+            if (tr != null) tr.enabled = false;
 
             tmp.text = text;
         }
@@ -459,10 +405,6 @@ public static class SettingsTabPatch
         }
     }
 
-    /// <summary>
-    /// 找原版设置行的模板：优先 Nebula 用的 MiscGroup/StreamerModeButton，
-    /// 找不到就在所有页签内容里取第一个 ToggleButtonBehaviour。
-    /// </summary>
     private static GameObject? FindRowTemplate(List<TabGroup> tabs)
     {
         try
@@ -501,7 +443,6 @@ public static class SettingsTabPatch
         return null;
     }
 
-    /// <summary>按 2 列网格重建所有设置行。</summary>
     private static void RebuildButtons()
     {
         try
@@ -545,20 +486,14 @@ public static class SettingsTabPatch
             var pb = go.GetComponent<PassiveButton>();
             if (pb != null)
             {
-                // ⚠️ 必须**整体替换** OnClick，不能用 AddListener 追加：
-                // 行是从原版设置的 ToggleButtonBehaviour（StreamerModeButton / 直播主模式）克隆来的，
-                // 它自带原版的点击逻辑 —— 追加的话点我们的开关会同时把"直播主模式"打开
-                //（主菜单里那个逻辑没有可见效果，进大厅后就会真的生效）。
                 pb.OnClick = new Button.ButtonClickedEvent();
                 pb.OnClick.AddListener((UnityAction)(() => info.OnClick?.Invoke()));
 
-                // 悬浮显示 detail：只有传了非空文本才挂监听（null/空白 → 连提示框都不会出现）
                 if (!string.IsNullOrWhiteSpace(info.Detail))
                 {
                     var detailText = info.Detail;
                     pb.OnMouseOver ??= new Button.ButtonClickedEvent();
                     pb.OnMouseOut ??= new Button.ButtonClickedEvent();
-                    // 注意：canPinByTab 在 options 注册接口里是**硬编码 true**，注册方只能传文本
                     pb.OnMouseOver.AddListener((UnityAction)(() => DetailPopup.Show(detailText, true, go.transform)));
                     pb.OnMouseOut.AddListener((UnityAction)(() => DetailPopup.Hide()));
                 }
@@ -581,9 +516,8 @@ public static class SettingsTabPatch
         try
         {
             string text = string.IsNullOrEmpty(info.ValueText) ? info.Label : $"{info.Label}: {info.ValueText}";
-            if (tbb.Text != null) tbb.Text.text = text;
+            tbb?.Text.text = text;
 
-            // 开启色 = 模组主色（原来是照 Nebula 抄的硬编码绿，和"MOD 颜色改成金色"不一致）
             var onColor = UColor.white;
             if (info.IsOn)
             {

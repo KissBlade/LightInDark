@@ -69,7 +69,7 @@ internal class LightOptionsRegistry
                 cur.AutoCheckUpdate = on;
                 LightSettings.Save(cur);
                 LightSettings.ReloadConfig();
-            }, "启动时自动比对云端版本；关掉后仍可在主界面手动「检查更新」");
+            }, "启动时自动比对云端版本");
 
         SettingsTabPatch.LightTabOpened += SyncFromSettings;
     }
