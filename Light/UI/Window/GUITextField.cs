@@ -283,6 +283,10 @@ public class TextFieldBehaviour : MonoBehaviour
     /// <summary>是否允许输入法（中文）。</summary>
     public bool UseIME = true;
 
+    /// <summary>进入编辑前的全局 IME 模式（失焦时还原，避免影响原版聊天框的中文输入）。</summary>
+    private static IMECompositionMode _imeBefore = IMECompositionMode.Auto;
+    private static bool _imePushed;
+
     private float _caretTimer;
     private bool _caretOn;
     private float _justFocused;      // 刚聚焦的宽限期，防止"点下去的那一下"立刻被判成失焦
@@ -306,7 +310,13 @@ public class TextFieldBehaviour : MonoBehaviour
             if (ValidField != null && ValidField != this) ValidField.LoseFocus();
 
             ValidField = this;
-            if (UseIME) Input.imeCompositionMode = IMECompositionMode.On;
+            if (UseIME)
+            {
+                // ⚠️ imeCompositionMode 是**全局**设置。关掉后原版聊天框的输入法也会一起失效
+                //    （表现：中文打不进去 / 被吞字）。所以进入编辑前先记住旧值，失焦时还原。
+                if (!_imePushed) { _imeBefore = Input.imeCompositionMode; _imePushed = true; }
+                Input.imeCompositionMode = IMECompositionMode.On;
+            }
 
             Cursor = Value.Length;
             _justFocused = 0.4f;
@@ -327,7 +337,12 @@ public class TextFieldBehaviour : MonoBehaviour
         {
             if (ValidField != this) return;
 
-            Input.imeCompositionMode = IMECompositionMode.Off;
+            // 还原进入编辑前的 IME 模式（默认 Auto），别把全局输入法关掉
+            if (_imePushed)
+            {
+                Input.imeCompositionMode = _imeBefore;
+                _imePushed = false;
+            }
             ValidField = null;
             if (Pipe != null) Pipe.text = "";
 

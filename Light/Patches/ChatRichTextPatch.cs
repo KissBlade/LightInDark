@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using HarmonyLib;
+using Il2CppInterop.Runtime.Injection;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
@@ -15,27 +17,74 @@ public static class ChatRichTextPatch
     /// <summary>克隆出来的预览按钮，避免重复建。</summary>
     private static GameObject? _previewButton;
 
+    /// <summary>缓存的输入框（每帧要复检 outputText，别每帧 GetComponentInChildren）。</summary>
+    private static TextBoxTMP? _inputBox;
+
+    /// <summary>
+    /// 每帧复检：**输入框永远显示原始标签**（用户："输入时不渲染，发出去才渲染"）。
+    ///
+    /// 为什么每帧查一遍：原版某些流程会碰 `outputText`（换行高度、ForceMeshUpdate 等），
+    /// 与其猜它什么时候被改回 true，不如只做"读一次、不对才写"——
+    /// 已经是 false 时**一个字节都不写**，不会触发 TMP 重建，开销可忽略 ✓
+    /// </summary>
+    internal static void EnsureInputRawDisplay(FreeChatInputField field)
+    {
+        try
+        {
+            var box = _inputBox != null ? _inputBox : field.GetComponentInChildren<TextBoxTMP>(true);
+            if (box == null) return;
+            _inputBox = box;
+
+            var outText = box.outputText;
+            if (outText != null && outText.richText) outText.richText = false;
+        }
+        catch { }
+    }
+
     [HarmonyPatch(typeof(ChatBubble), nameof(ChatBubble.SetName))]
     public static class ChatBubbleRichTextPatch
     {
         [HarmonyPostfix]
         public static void Postfix(ChatBubble __instance)
         {
-            try
-            {
-                if (__instance == null) return;
-                var area = __instance.TextArea;
-                if (area == null) return;
+            EnableBubbleRichText(__instance);
+        }
+    }
 
-                area.richText = true;
-                area.overrideColorTags = false;
+    /// <summary>
+    /// 气泡正文：**发出去的消息要渲染富文本**（用户："只有发出去时渲染"）。
+    ///
+    /// ⚠️ 文字是 <c>ChatBubble.SetText</c>（internal → 用字符串名挂）写进去的：
+    /// <code> this.TextArea.text = chatText; </code>
+    ///    所以 SetName 与 SetText **两处都要覆盖**，谁先谁后都不漏。
+    /// </summary>
+    [HarmonyPatch(typeof(ChatBubble), "SetText")]
+    public static class ChatBubbleSetTextPatch
+    {
+        [HarmonyPostfix]
+        public static void Postfix(ChatBubble __instance)
+        {
+            EnableBubbleRichText(__instance);
+        }
+    }
 
-                LightLogger.LogDebug("[ChatRichText] 聊天气泡已开启富文本渲染");
-            }
-            catch (Exception ex)
-            {
-                LightLogger.LogWarning($"[ChatRichText.ChatBubbleRichTextPatch] {ex.Message}");
-            }
+    /// <summary>把气泡的文字区设成"渲染富文本"（读一次再写，避免无谓的 TMP 重建）。</summary>
+    private static void EnableBubbleRichText(ChatBubble? bubble)
+    {
+        try
+        {
+            if (bubble == null) return;
+            var area = bubble.TextArea;
+            if (area == null) return;
+
+            if (!area.richText) area.richText = true;
+            if (area.overrideColorTags) area.overrideColorTags = false;
+
+            LightLogger.LogDebug("[ChatRichText] 聊天气泡已开启富文本渲染");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[ChatRichText.EnableBubbleRichText] {ex.Message}");
         }
     }
 
@@ -54,11 +103,35 @@ public static class ChatRichTextPatch
                 var field = __instance.TryCast<FreeChatInputField>();
                 if (field == null) return;
 
+                // ① 输入框显示原始标签（不解析 <color=...>）—— 用户："输入时不渲染，发出去才渲染"
+                // ⚠️ **两处都要设成 false**，只设一处都会出问题：
+                //    · `inputField.richText = false` → TMP_InputField 自己状态一致，不会把 true 写回去；
+                //    · `outputText.richText  = false` → **真正决定显示的那个** ✓
+                //      原版 `TextBoxTMP.SetText` 里是 `this.outputText.text = text + text2;`
+                //      → 输入框显示的**就是 outputText**，渲不渲染由它说了算。
+                //    只写 outputText 是**和 TMP_InputField 抢文本组件的管理权** ✗：
+                //    字段按自己的 richText 把 true 覆盖回来 → 状态不一致 → 删字时索引算错
+                //    （表现就是「冒出一个方块、之后输入全乱」）。两边一致才自洽。
                 var box = field.GetComponentInChildren<TextBoxTMP>(true);
-                if (box != null && box.outputText != null)
+                if (box != null)
                 {
-                    box.outputText.richText = false;
-                    LightLogger.Log("[ChatRichText] 聊天输入框已关闭富文本渲染（显示原始标签）");
+                    try
+                    {
+                        var inputField = box.GetComponentInChildren<TMP_InputField>(true);
+                        if (inputField != null && inputField.richText) inputField.richText = false;
+                    }
+                    catch { }
+
+                    // ★ 真正决定"输入框渲不渲染"的是 outputText ——
+                    //   原版 TextBoxTMP.SetText 里就是 `this.outputText.text = text + text2;`
+                    try
+                    {
+                        if (box.outputText != null && box.outputText.richText) box.outputText.richText = false;
+                        _inputBox = box;
+                    }
+                    catch { }
+
+                    LightLogger.Log("[ChatRichText] 输入框已关闭富文本解析（显示原始标签；TMP_InputField 与 outputText 同时关）");
                 }
 
                 BuildPreviewButton(field);
@@ -142,16 +215,24 @@ public static class ChatRichTextPatch
             _previewPb = pb;
 
             // ---- 输入变化 → 刷新"能不能渲染" ----
+            // ⚠️ **不挂聊天框的 OnChange**：OnChange 是在输入处理链路里**同步**触发的，
+            //    挂在那里做额外工作，有可能在输入法提交那一帧挤掉字符（小概率吞字）。
+            //    改由自己的 Update 轮询（ChatPreviewDriver），完全不碰输入链路。
+            //
+            // ⚠️⚠️ 轮询驱动**必须挂在"一直活着的物体"上** ——
+            //    预览按钮现在是**默认隐藏**的（用户要求：能渲染才出现），
+            //    而**隐藏物体的 Update 根本不会跑** → 挂在按钮上会导致"永远没人把它显示出来"。
+            //    所以挂到聊天输入框自己身上（开聊天框时它一定是激活的）。
             try
             {
-                var box = field.GetComponentInChildren<TextBoxTMP>(true);
-                if (box != null)
+                var host = field.gameObject;
+                if (host.GetComponent<ChatPreviewDriver>() == null)
                 {
-                    box.OnChange ??= new UnityEngine.UI.Button.ButtonClickedEvent();
-                    box.OnChange.AddListener((UnityAction)(() => RefreshPreviewButton(field)));
+                    var driver = host.AddComponent<ChatPreviewDriver>();
+                    driver.Field = field;
                 }
             }
-            catch (Exception ex) { LightLogger.LogWarning($"[ChatRichText] 挂 OnChange 失败：{ex.Message}"); }
+            catch (Exception ex) { LightLogger.LogWarning($"[ChatRichText] 挂轮询驱动失败：{ex.Message}"); }
 
             RefreshPreviewButton(field);   // 先按当前内容定一次
 
@@ -240,12 +321,70 @@ public static class ChatRichTextPatch
                 return false;
         }
     }
+    // =====================================================================
+    //  诊断：输入框里是否混进了"会画成方块 / 破坏光标"的字符
+    // =====================================================================
+
+    /// <summary>已报告过的可疑码位（每种只报一次，避免刷屏）。</summary>
+    private static readonly HashSet<int> _reportedUnsafe = new();
+
     /// <summary>
-    /// 按当前输入刷新预览按钮的**显示 / 隐藏**。
+    /// 检测输入框文本里的可疑字符并打日志（带完整码位明细）。
+    /// 用途：定位「删字冒方块」到底是**字符**问题还是**渲染残留** ——
+    /// 若日志从不触发，说明方块不在文本里，得往渲染层查。
+    /// </summary>
+    private static void DiagnoseChatText(FreeChatInputField field)
+    {
+        try
+        {
+            string text = "";
+            try { text = field.Text ?? ""; } catch { }
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                bool bad = char.IsSurrogate(c)
+                        || char.IsControl(c)
+                        || (c >= '\u200B' && c <= '\u200F')
+                        || (c >= '\u2028' && c <= '\u202E')
+                        || (c >= '\u2060' && c <= '\u206F')
+                        || c == '\uFEFF'
+                        || (c >= '\uE000' && c <= '\uF8FF');
+                if (!bad) continue;
+                if (!_reportedUnsafe.Add(c)) continue;      // 每种码位只报一次
+
+                var sb = new System.Text.StringBuilder(text.Length * 7 + 64);
+                sb.Append("[ChatRichText.诊断] 输入框出现可疑字符 U+").Append(((int)c).ToString("X4"))
+                  .Append("（index=").Append(i).Append("，长度=").Append(text.Length).Append("）码位明细：");
+                for (int k = 0; k < text.Length; k++)
+                    sb.Append("U+").Append(((int)text[k]).ToString("X4")).Append(' ');
+                LightLogger.LogWarning(sb.ToString());
+                break;   // 一次只报第一个
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>每帧轮询入口（由 <see cref="ChatPreviewDriver"/> 调用；不参与输入链路）。</summary>
+    internal static void Tick(FreeChatInputField field)
+    {
+        EnsureInputRawDisplay(field);               // 输入框永远显示原始标签（发出去才渲染）
+        RefreshPreviewButton(field);
+        DiagnoseChatText(field);
+        RichTextInputPatch.LogInputChange(field);   // 输入序列诊断（定位"第几个字被吞"）
+    }
+
+    /// <summary>上次的"能不能渲染"与文本长度；每帧轮询用，状态没变就跳过。</summary>
+    private static bool _lastCanRender;
+    private static int _lastCanRenderLen = -1;
+
+    /// <summary>
+    /// 按当前输入刷新预览按钮的**显示 / 隐藏**（状态没变时直接返回，不做任何 UI 写操作）。
     ///
     /// 用户 2026-10-06："预览按钮默认不出现，只有输入框文本**可以渲染**时预览按钮才出现。"
-    ///   → 所以这里直接 <c>SetActive(canRender)</c>，不再用"灰色变暗"那套（暗着也还是占位置、还是能点）。
-    ///   ⚠️ 按钮隐藏时**照样能刷新** —— 监听挂在输入框的 <c>OnChange</c> 上，不在按钮上。
+    ///   → 直接 <c>SetActive(canRender)</c>，不再用"灰色变暗"那套（暗着也照样占位置、照样能点）。
+    ///   → 刷新走 <see cref="ChatPreviewDriver"/> 每帧轮询（**不挂 OnChange**：那在输入链路里同步触发，
+    ///     可能挤掉输入法提交那一帧的字符）。
     /// </summary>
     private static void RefreshPreviewButton(FreeChatInputField field)
     {
@@ -258,7 +397,14 @@ public static class ChatRichTextPatch
 
             bool canRender = HasRenderableRichText(text);
 
-            // 能渲染才出现；否则整个按钮收起来
+            // ⚠️ 这里由 ChatPreviewDriver 每帧轮询进来：
+            //    状态没变就立刻返回，不做 UI 写操作、不写日志 ——
+            //    免得每帧一次的额外开销在输入法提交那一帧挤掉字符（小概率吞字）。
+            if (canRender == _lastCanRender && text.Length == _lastCanRenderLen) return;
+            _lastCanRender = canRender;
+            _lastCanRenderLen = text.Length;
+
+            // ★ 用户要求：**默认不出现**，只有文本"能渲染"时才出现（旧版是变灰但仍占位置且可点 ✗）
             try { _previewButton.SetActive(canRender); } catch { }
 
             // 出现时必须是"能点的"（克隆体会继承原版"未聚焦就禁用"的状态）
@@ -573,6 +719,36 @@ public static class ChatRichTextPatch
         try { _previewWindow?.Close(); }
         catch { }
         finally { _previewWindow = null; }
+    }
+}
+
+/// <summary>
+/// 预览按钮 / 诊断的**每帧轮询驱动**。
+///
+/// ⚠️ 为什么不用聊天框的 <c>OnChange</c>：那个事件是在**输入处理链路里同步触发**的
+///    （每敲一个字都会进来）。我们挂在那里读文本、改颜色、扫可疑字符，
+///    就有可能在输入法提交那一帧挤掉字符 —— 表现为「小概率吞字」。
+///    改由独立 MonoBehaviour 的 Update 轮询后，我们的代码**完全不碰输入链路**。
+/// </summary>
+public class ChatPreviewDriver : MonoBehaviour
+{
+    static ChatPreviewDriver()
+    {
+        try { ClassInjector.RegisterTypeInIl2Cpp<ChatPreviewDriver>(); }
+        catch { }
+    }
+
+    /// <summary>要盯着的聊天输入框。</summary>
+    public FreeChatInputField? Field;
+
+    public void Update()
+    {
+        try
+        {
+            if (Field == null) return;
+            ChatRichTextPatch.Tick(Field);
+        }
+        catch { }
     }
 }
 
