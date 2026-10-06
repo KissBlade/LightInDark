@@ -8,22 +8,8 @@ using UnityEngine.Networking;
 
 namespace Light.Tools;
 
-/// <summary>
-/// 模组外部工具（<c>&lt;游戏根目录&gt;\Light_Data\Tools</c>）的检查 / 下载 / 远端版本比对。
-///
-/// ⚠️ 两个 URL 目前的实测状态（2026-10-03）：
-///    - <c>https://lid.moonscar.cn/</c>          → 200，标题「维护中」
-///    - <c>.../light/version.json</c>            → **404**
-///    - <c>.../download/LightUpdater.exe</c>     → **404**
-///    所以 <see cref="RemoteVersion"/> 的 JSON 字段名是**我猜的**：
-///    这里刻意做成"多种键名都认"的容错解析，等站点上线后如果对不上，
-///    日志里会打出原始 JSON，照着改 <see cref="PickStr"/> 的候选表即可。
-/// </summary>
 public static class LightToolManager
 {
-    // ======================= 常量 =======================
-
-    /// <summary>工具可执行文件名（用户本轮指定，注意和旧的 LightInDarkUpdater.exe 不是一个）。</summary>
     public const string UpdaterExeName = "LightUpdater.exe";
 
     /// <summary>

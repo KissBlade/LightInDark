@@ -30,6 +30,8 @@ public class Caller : RoleTemplate
 
     public override RuntimeRoleTemplate CreateRuntime(PlayerControl owner)
         => new RuntimeInstance(owner, this);
+    public override string Intro => "一份按钮";
+    public override string? RoleImagePath => "RoleImage/CallerImage.png";
 
     public class RuntimeInstance : RuntimeRoleTemplate
     {

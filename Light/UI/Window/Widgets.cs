@@ -224,6 +224,8 @@ public class NoSGUIText : AbstractGUIWidget
             text.fontSizeMax = attr.FontSize.FontSizeMax;
             text.enableAutoSizing = attr.FontSize.AllowAutoSizing;
             text.enableWordWrapping = attr.Wrapping;
+            // 换行时不裁剪字形，可视裁剪交给外层滚动区
+            if (attr.Wrapping) text.overflowMode = TextOverflowModes.Overflow;
             text.rectTransform.sizeDelta = new Vector2(Mathf.Min(width, attr.Size.Width), attr.Size.Height);
             text.rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
             text.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
@@ -233,7 +235,7 @@ public class NoSGUIText : AbstractGUIWidget
             {
                 text.font = attr.Font.FontAsset;
                 if (attr.Font.FontMaterial != null)
-                    text.fontMaterial = attr.Font.FontMaterial;
+                    text.fontSharedMaterial = attr.Font.FontMaterial;   // 共享材质：与 GUIScrollView.ApplyMask 的图集比对保持一致
             }
         }
         catch (Exception ex)
@@ -269,7 +271,11 @@ public class NoSGUIText : AbstractGUIWidget
             {
                 if (text.enableWordWrapping)
                 {
-                    float w = Mathf.Min(text.rectTransform.sizeDelta.x, text.textBounds.size.x);
+                    // 换行：宽度先定，高度给足后再测实际占用，避免截断或溢出
+                    float availableWidth = Mathf.Min(size.Width, Attr.Size.Width);
+                    text.rectTransform.sizeDelta = new Vector2(availableWidth, Attr.Size.Height);
+                    text.ForceMeshUpdate();
+                    float w = Mathf.Min(text.textBounds.size.x, availableWidth);
                     float h = text.textBounds.size.y;
                     text.rectTransform.sizeDelta = new Vector2(w, h);
                 }
@@ -351,6 +357,11 @@ public class GUIButton : NoSGUIText
                 passiveButton.OnMouseOver.AddListener((UnityAction)(() => OnMouseOver(clickable)));
             if (OnMouseOut != null)
                 passiveButton.OnMouseOut.AddListener((UnityAction)(() => OnMouseOut(clickable)));
+
+            // 点击音效：框架按钮统一在这里发声（H 菜单的页签/职业/搜索结果按钮、职业页、预设窗等都走 GUIButton）。
+            // 只给"真的有点击行为"的按钮发声；用缓存版 helper，避免每次点击都全量搜索音效资源。
+            if (OnClick != null || OnRightClick != null)
+                passiveButton.OnClick.AddListener((UnityAction)(() => VanillaAsset.PlayUiSelect()));
 
             actualSize.Width += margin + 0.1f;
             actualSize.Height += margin + 0.1f;

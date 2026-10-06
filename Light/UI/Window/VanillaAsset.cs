@@ -528,9 +528,45 @@ public static class VanillaAsset
         }
     }
 
+    // ── UI 音效（缓存版）──────────────────────────────────────────────────
+    // FindSoundClip 会遍历**全部已加载对象**，很贵 → 只查一次并缓存。
+    // 缓存对象若被销毁（Unity 假 null，见 AGENTS §4.6.1），允许少量重查（场景切换后可能被卸载）。
+    private static AudioClip? _uiSelectClip;
+    private static AudioClip? _uiHoverClip;
+    private static int _uiSelectAttempts;
+    private static int _uiHoverAttempts;
+
+    /// <summary>播放原版"确定"音效（按钮点击用）。查不到就静默跳过。</summary>
+    public static void PlayUiSelect(float volume = 0.8f)
+    {
+        var clip = ResolveUiClip("UI_Select", ref _uiSelectClip, ref _uiSelectAttempts);
+        if (clip == null) return;
+        try { SoundManager.Instance?.PlaySound(clip, false, volume); } catch { }
+    }
+
+    /// <summary>播放原版"悬浮"音效（鼠标移入用）。</summary>
+    public static void PlayUiHover(float volume = 0.7f)
+    {
+        var clip = ResolveUiClip("UI_Hover", ref _uiHoverClip, ref _uiHoverAttempts);
+        if (clip == null) return;
+        try { SoundManager.Instance?.PlaySound(clip, false, volume); } catch { }
+    }
+
+    /// <summary>取缓存的 UI 音效；缓存被销毁时最多重查 5 次，之后不再重试（避免每次点击都全量搜索）。</summary>
+    private static AudioClip? ResolveUiClip(string name, ref AudioClip? cache, ref int attempts)
+    {
+        if (cache != null) return cache;              // 注意：这里必须用 != ，Unity 的 == 能识别"假 null"
+        if (attempts >= 5) return null;
+
+        attempts++;
+        cache = FindSoundClip(name);
+        if (cache == null && attempts >= 5)
+            LightLogger.LogWarning($"[VanillaAsset] 找不到音效 {name}（已尝试 {attempts} 次，之后不再重试）");
+        return cache;
+    }
+
     /// <summary>获取可用按钮背景</summary>
-    public static Sprite GetButtonSprite() => TextButtonSprite;
-    /// <summary>获取可用窗口背景</summary>
+    public static Sprite GetButtonSprite() => TextButtonSprite;    /// <summary>获取可用窗口背景</summary>
     public static Sprite GetWindowSprite() => PopUpBackSprite;
     /// <summary>获取可用全屏遮罩</summary>
     public static Sprite GetFullScreenSprite() => FullScreenSprite;

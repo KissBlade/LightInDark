@@ -95,7 +95,7 @@ public class TextAttribute
     public bool Wrapping { get; init; } = false;
     public float? OutlineWidth { get; init; } = null;
 
-    public TextAttribute(TextAlignment alignment, Font font, FontStyle style, FontSize fontSize, Size size, Color color, bool isFlexible, float? outlineWidth = null)
+    public TextAttribute(TextAlignment alignment, Font font, FontStyle style, FontSize fontSize, Size size, Color color, bool isFlexible, float? outlineWidth = null, bool wrapping = false)
     {
         try
         {
@@ -107,6 +107,7 @@ public class TextAttribute
             Color = color;
             IsFlexible = isFlexible;
             OutlineWidth = outlineWidth;
+            Wrapping = wrapping;
         }
         catch (Exception ex)
         {

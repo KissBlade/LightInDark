@@ -12,9 +12,15 @@ public static class HelpKeyPatch
     {
         try
         {
-            // ESC 关闭
+            // 模态遮罩：H 菜单打开期间每帧禁用不属于本窗口的原版控件，防止误触背景（未打开时内部自动跳过）
+            Light.UI.UiModalGuard.Sweep();
+
+            // ESC 关闭：优先关二级窗口（职业详情），没有二级窗口才关整个 H 菜单
             if (Input.GetKeyDown(KeyCode.Escape) && HelpScreen.OpenedAnyHelpScreen)
-                HelpScreen.TryCloseHelpScreen();
+            {
+                if (!HelpScreen.TryCloseTopWindow())
+                    HelpScreen.TryCloseHelpScreen();
+            }
             // H 打开
             if (Input.GetKeyDown(KeyCode.H) && CanOpenHelp())
                 HelpScreen.TryOpenHelpScreen();

@@ -45,39 +45,39 @@ public class GUIScrollView : AbstractGUIWidget
 
         public void SetWidget(GUIWidget? widget, out Size actualSize)
         {
+            actualSize = Size.Zero;
             try
             {
-                if (_screen == null)
+                if (_screen == null) return;
+
+                // 销毁旧内容：Destroy 延迟到帧末，先脱离父级避免本帧新旧内容并存
+                for (int i = _screen.transform.childCount - 1; i >= 0; i--)
+                {
+                    var child = _screen.transform.GetChild(i);
+                    child.SetParent(null, false);
+                    Object.Destroy(child.gameObject);
+                }
+
+                if (widget == null) return;
+
+                var obj = widget.Instantiate(_innerSize, out actualSize);
+                if (obj == null)
                 {
                     actualSize = Size.Zero;
                     return;
                 }
 
-                // 销毁旧内容
-                for (int i = _screen.transform.childCount - 1; i >= 0; i--)
-                    Object.Destroy(_screen.transform.GetChild(i).gameObject);
+                obj.transform.SetParent(_screen.transform, false);
+                obj.transform.localPosition = Vector3.zero;
+                ApplyMask(obj);
 
-                if (widget != null)
-                {
-                    var obj = widget.Instantiate(_innerSize, out actualSize);
-                    if (obj != null)
-                    {
-                        obj.transform.SetParent(_screen.transform, false);
-                        obj.transform.localPosition = Vector3.zero;
-                        ApplyMask(obj);
+                // 内容按钮 ClickMask 设为滚动区域碰撞体，避免窗口大 ClickGuard 挡住点击
+                if (_scrollerCollider != null)
+                    foreach (var button in _screen.GetComponentsInChildren<PassiveButton>(true))
+                        button.ClickMask = _scrollerCollider;
 
-                        // 内容按钮 ClickMask 设为滚动区域碰撞体，避免窗口大 ClickGuard 挡住点击
-                        if (_scrollerCollider != null)
-                            foreach (var button in _screen.GetComponentsInChildren<PassiveButton>(true))
-                                button.ClickMask = _scrollerCollider;
-
-                        _scroller!.SetBounds(new FloatRange(0, Mathf.Max(0f, actualSize.Height - _viewHeight)), null);
-                        _scroller.ScrollRelative(Vector2.zero);
-                        return;
-                    }
-                }
-
-                actualSize = Size.Zero;
+                _scroller!.SetBounds(new FloatRange(0, Mathf.Max(0f, actualSize.Height - _viewHeight)), null);
+                _scroller.ScrollRelative(Vector2.zero);
             }
             catch (Exception ex)
             {
@@ -112,7 +112,7 @@ public class GUIScrollView : AbstractGUIWidget
             {
                 var mask = UnityHelper.CreateObject<SpriteMask>("Mask", view.transform, new Vector3(-0.2f, 0f, 0f));
                 mask.sprite = VanillaAsset.FullScreenSprite;
-                mask.transform.localScale = new Vector3(innerSize.Width, innerSize.Height, 1f);
+                mask.transform.localScale = GetMaskScale(mask.sprite, innerSize);
             }
 
             var inner = UnityHelper.CreateObject("Inner", view.transform, new Vector3(-0.2f, 0f, -0.1f));
@@ -137,7 +137,27 @@ public class GUIScrollView : AbstractGUIWidget
     }
 
     /// <summary>
-    /// 内容树遮罩设置：SpriteRenderer 收进 SpriteMask，文本换 masked 材质
+    /// 计算 SpriteMask 缩放：遮罩实际尺寸 = sprite.bounds.size × localScale，故按 sprite 实际 bounds 反算
+    /// </summary>
+    private static Vector3 GetMaskScale(Sprite? sprite, Size innerSize)
+    {
+        try
+        {
+            var bounds = sprite != null ? sprite.bounds.size : Vector3.zero;
+            if (bounds.x > 0f && bounds.y > 0f)
+                return new Vector3(innerSize.Width / bounds.x, innerSize.Height / bounds.y, 1f);
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GUIScrollView.GetMaskScale]", ex);
+        }
+
+        // 取不到 bounds 时退回原逻辑
+        return new Vector3(innerSize.Width, innerSize.Height, 1f);
+    }
+
+    /// <summary>
+    /// 内容树遮罩设置：SpriteRenderer 收进 SpriteMask，图集一致的文本才换 masked 材质
     /// </summary>
     private static void ApplyMask(GameObject root)
     {
@@ -145,12 +165,29 @@ public class GUIScrollView : AbstractGUIWidget
         {
             foreach (var sr in root.GetComponentsInChildren<SpriteRenderer>(true))
                 sr.maskInteraction = SpriteMaskInteraction.VisibleInsideMask;
+
+            // 仅当蒙版材质与当前字体图集一致时才套用，否则字形采样错位会渲染成别的字
+            var masked = VanillaAsset.StandardMaskedFontMaterial;
             foreach (var tmp in root.GetComponentsInChildren<TextMeshPro>(true))
-                tmp.fontSharedMaterial = VanillaAsset.StandardMaskedFontMaterial;
+                if (masked != null && SameAtlas(tmp.fontSharedMaterial, masked))
+                    tmp.fontSharedMaterial = masked;
         }
         catch (Exception ex)
         {
             LightLogger.LogError("[GUIScrollView.ApplyMask]", ex);
+        }
+    }
+
+    /// <summary>比较字体材质与蒙版材质是否使用同一张图集</summary>
+    private static bool SameAtlas(Material? fontMat, Material masked)
+    {
+        try
+        {
+            return fontMat != null && fontMat.mainTexture == masked.mainTexture;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

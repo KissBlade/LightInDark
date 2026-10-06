@@ -6,8 +6,8 @@ using LightInDark.UI.Window;
 using Light.UI.Window;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Rendering;          // SortingGroup
 using UnityEngine.Events;
-using UnityEngine.Rendering;
 using UnityEngine.UI;
 using LightInDark.Core;
 using Button = UnityEngine.UI.Button;
@@ -415,12 +415,25 @@ public class MetaScreen : MonoBehaviour
     }
 
     /// <summary>
+    /// 关闭按钮（左上角那个 X）的**默认缩放**。
+    ///
+    /// ⚠️ 2026-10-06 用户连着几轮说"关闭按钮太小"，而我一直在**外面**用
+    ///    `FindDeep("CloseButton")` 改 `localScale` —— **那套从来就没生效过**，两个原因：
+    ///      ① 原来这里是**写死的 0.57**，外面怎么改都会被这里覆盖；
+    ///      ② `HudUIWindow.GameObject` 是 **Screen 那一层**，而 CloseButton 是它的**兄弟**
+    ///         （都挂在 MetaWindow 下）→ 从 `GameObject` 往下找**根本找不到**。
+    ///    → **尺寸就该在这里改**（用户原话："你去动 HudUI 吧"）。
+    ///    所有走 GenerateWindow 的窗口（预设窗口、提示窗口、音乐窗口…）一起生效。
+    /// </summary>
+    public const float DefaultCloseButtonScale = 0.90f;   // 原来是硬编码的 0.57
+
+    /// <summary>
     /// 生成窗口
     /// </summary>
     public static MetaScreen GenerateWindow(Vector2 size, Transform? parent, Vector3 localPos,
         bool withBlackScreen = true, bool closeOnClickOutside = false,
         BackgroundSetting background = BackgroundSetting.Modern, bool withCloseButton = true,
-        int sortingGroupOrder = 100)
+        int sortingGroupOrder = 100, float closeButtonScale = DefaultCloseButtonScale)
     {
         try
         {
@@ -429,12 +442,17 @@ public class MetaScreen : MonoBehaviour
 
             if (withCloseButton)
             {
+                // ⚠️ 位置**不跟着缩放走**（2026-10-06 修：我一度让它按 `closeButtonScale/0.57`
+                //   外移，结果按钮被推到窗口外面很远 —— 用户："太远了"）。
+                //   算一下就知道不用挪：0.57 缩放时按钮半边 = 0.85×0.57/2 = 0.242，
+                //   内边缘在 `-0.3 + 0.242 = -0.058`（正好贴窗口左缘）；放大到 0.90 后半边 = 0.3825，
+                //   用同一个 -0.3，内边缘会稍微压进窗口一点 —— **这正是变大后该有的样子**。
                 if (background == BackgroundSetting.Modern)
                 {
                     // Modern 风格关闭按钮 — 左上角外侧
                     var collider = CreateObject<BoxCollider2D>("CloseButton", obj.transform,
                         new Vector3(-size.x / 2f - 0.3f, size.y / 2f + 0.2f, 0f));
-                    collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);
+                    collider.transform.localScale = new Vector3(closeButtonScale, closeButtonScale, 1f);
                     collider.isTrigger = true;
                     collider.gameObject.layer = LayerExpansion.GetUILayer();
                     collider.size = new Vector2(0.85f, 0.85f);
@@ -452,7 +470,7 @@ public class MetaScreen : MonoBehaviour
                     // Old 风格关闭按钮
                     var collider = CreateObject<BoxCollider2D>("CloseButton", obj.transform,
                         new Vector3(-size.x / 2f - 0.3f, size.y / 2f + 0.2f, 0f));
-                    collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);
+                    collider.transform.localScale = new Vector3(closeButtonScale, closeButtonScale, 1f);
                     collider.isTrigger = true;
                     collider.gameObject.layer = LayerExpansion.GetUILayer();
                     collider.size = new Vector2(0.85f, 0.85f);
@@ -533,7 +551,7 @@ public class MetaScreen : MonoBehaviour
             {
                 var collider = CreateObject<BoxCollider2D>("NavButton", obj.transform,
                     new Vector3(screen.Border.x / 2f + 0.3f - x, screen.Border.y / 2f + 0.25f, 0f));
-                collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);
+                collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);   // NavButton 不是关闭按钮，保持原样
                 collider.isTrigger = true;
                 collider.gameObject.layer = LayerExpansion.GetUILayer();
                 collider.size = new Vector2(0.65f, 0.65f);
@@ -850,6 +868,33 @@ public class HudUIButton
     }
 
     /// <summary>
+    /// **覆盖"选中态"用的贴图**。
+    ///
+    /// 用户 2026-10-06（预设窗口）："这个选中态也太难堪了，你就让他变成类似于
+    /// 鼠标悬停时的样子行不" —— 默认的 <c>_selectedSprite</c>（ButtonSelected）
+    /// 是一整块高亮，用在**卡片列表**里太重；这里允许调用方换成别的
+    /// （预设窗口就换成 <c>ButtonHover</c>，和悬停同一个观感）。
+    ///
+    /// ⚠️ 只影响**这一个按钮实例** —— 不动 <c>HudUIAssets</c>，别的窗口照旧。
+    /// </summary>
+    public void SetSelectedSprite(Sprite? selected, Sprite? selectedHover = null)
+    {
+        try
+        {
+            if (selected != null) _selectedSprite = selected;
+            if (selectedHover != null) _selectedHoverSprite = selectedHover;
+            else if (selected != null) _selectedHoverSprite = selected;
+
+            // 立刻就刷一次，否则要等下一次悬停进出才看得到变化
+            if (_isSelected) Renderer.sprite = _selectedSprite;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[HudUI.SetSelectedSprite]", ex);
+        }
+    }
+
+    /// <summary>
     /// 设置按钮尺寸。传入 null 则恢复为文本自适应（文本 × 1.5）。
     /// </summary>
     public void SetSize(Vector2? size)
@@ -932,8 +977,7 @@ public class HudUIWindow
             Screen = screen;
             GameObject = screen.gameObject;
             _windowSize = windowSize;
-            _currentY = windowSize.y * 0.5f - 0.5f;
-        }
+            _currentY = windowSize.y * 0.5f - 0.5f;        }
         catch (Exception ex)
         {
             LightLogger.LogError("[HudUI.HudUIWindow]", ex);
@@ -943,7 +987,28 @@ public class HudUIWindow
     /// <summary>
     /// 创建窗口
     /// </summary>
-    public static HudUIWindow Create(string title = "", Vector2? size = null, Transform? parent = null)
+    /// <summary>
+    /// 创建窗口。
+    /// </summary>
+    /// <param name="blockInputBehind">
+    /// **是否屏蔽窗口背后的点击**，默认 true。
+    ///
+    /// ⚠️ 为什么必须有这个（2026-10-06 用户："我发现确认框能点到原版的东西，
+    ///    这个也内置到 HudUI 里面作为可选形参吧，默认 true，要不然一直有问题"）：
+    ///
+    ///    原版 <c>PassiveButtonManager</c> 的**点击**判定对**每个碰撞盒重叠的按钮**都会派发 ——
+    ///    它**只对悬停按 z 取最靠前那个**（见 HandleMouseOver 里的 z 比较），
+    ///    点击那一段（Update 里 L58 那个循环）**完全没有 z 判定**。
+    ///
+    ///    → **"窗口盖在上面"根本不等于"拦住了下面的点击"**，
+    ///      黑幕、底板、SortingGroup 全都拦不住。
+    ///      必须**显式把不属于本窗口的原版控件禁用掉**（就是 <see cref="UiModalGuard"/> 干的事）。
+    ///
+    ///    这里把它内置：开窗时 Push + 挂每帧 Sweep 驱动器，关窗时 Pop 还原。
+    /// </param>
+    public static HudUIWindow Create(string title = "", Vector2? size = null, Transform? parent = null,
+        bool blockInputBehind = true, int sortingGroupOrder = 100, float z = -50f,
+        bool topSortingLayer = false)
     {
         try
         {
@@ -951,11 +1016,73 @@ public class HudUIWindow
             if (parent == null) throw new InvalidOperationException("HudManager 未就绪");
 
             var windowSize = size ?? new Vector2(5f, 3f);
-            var screen = MetaScreen.GenerateWindow(windowSize, parent, new Vector3(0f, 0f, -50f),
-                withBlackScreen: true, closeOnClickOutside: false,
-                background: BackgroundSetting.Modern, withCloseButton: true);
 
-            return new HudUIWindow(screen, windowSize);
+            // ⚠️ 2026-10-06 把 sortingGroupOrder / z 开放出来（原来写死 100 / -50）：
+            //    用户反馈"弹窗会在聊天框后面" —— **聊天框属于 HUD，它的 sortingOrder 比 100 高**，
+            //    于是我们的窗口被压在它下面：看得见、点不到；再叠加 UiModalGuard 把下层锁住 → 卡死。
+            //    ⚠️ **窗口盖不盖得住只取决于 sortingGroupOrder**，z 只在同一 sortingOrder 内部比较。
+            var screen = MetaScreen.GenerateWindow(windowSize, parent, new Vector3(0f, 0f, z),
+                withBlackScreen: true, closeOnClickOutside: false,
+                background: BackgroundSetting.Modern, withCloseButton: true,
+                sortingGroupOrder: sortingGroupOrder);
+
+            var window = new HudUIWindow(screen, windowSize);
+            if (blockInputBehind) window.EnableInputBlock();
+
+            // ⚠️⚠️ 2026-10-06（用户第二次反馈"弹窗还是在聊天框后面"，order=30000 也没用）：
+            //
+            //   **问题不是 order，是 SortingLayer。**
+            //   Unity 的排序是 **先比 sortingLayer，再比 sortingOrder** ——
+            //   层不对的话 order 给到 32767 也没用。
+            //
+            //   而 `MetaScreen.GenerateScreen` 里**只设了 `sortGroup.sortingOrder`，
+            //   从没设过 `sortingLayerID`** → 窗口一直留在默认层上，
+            //   而 HUD 的聊天框在更靠后的排序层里 → 我们永远被压在下面。
+            //
+            //   修法：把窗口的 SortingGroup 抬到 **`SortingLayer.layers` 里最后那个层**
+            //   （那个数组按值升序，最后一个就是最靠前的）✓
+            if (topSortingLayer)
+            {
+                try
+                {
+                    // ⚠️⚠️⚠️ **绝对不要用 `SortingLayer.layers`**（2026-10-06 日志实证）：
+                    //   它在 IL2CPP 里**被裁剪掉了**，一调就抛 `Method unstripping failed` ——
+                    //   于是整个 `if` 块**静默失效**，order 没设、层没抬、渲染器循环也没跑。
+                    //   我前面三轮"调了没用"就是这个原因：**代码根本没执行**。
+                    //
+                    //   改用不需要枚举层的办法：**给窗口子树里每个渲染器直接写排序值**。
+                    //   只要值足够大，在哪个层都能压过去（不依赖"找到最高层"）。
+                    int fixedRenderers = 0, fixedGroups = 0;
+                    var meta = screen.transform.parent;      // MetaWindow
+
+                    if (meta != null)
+                    {
+                        // ① 嵌套 SortingGroup（HudUIButton 自己挂了一个，会覆盖外层）
+                        foreach (var g in meta.GetComponentsInChildren<SortingGroup>(true))
+                        {
+                            if (g == null) continue;
+                            g.sortingOrder = sortingGroupOrder;
+                            fixedGroups++;
+                        }
+
+                        // ② 每个渲染器 —— 有 SortingGroup 的会被组统一管，没组的直接写
+                        foreach (var r in meta.GetComponentsInChildren<Renderer>(true))
+                        {
+                            if (r == null) continue;
+                            r.sortingOrder = sortingGroupOrder;
+                            fixedRenderers++;
+                        }
+                    }
+
+                    LightLogger.Log($"[HudUIWindow] 排序已设：order={sortingGroupOrder}" +
+                                    $"，改了 {fixedGroups} 个 SortingGroup + {fixedRenderers} 个渲染器");
+                }
+                catch (Exception ex)
+                {
+                    LightLogger.LogWarning($"[HudUIWindow] 设排序失败：{ex.Message}");
+                }
+            }
+            return window;
         }
         catch (Exception ex)
         {
@@ -963,7 +1090,122 @@ public class HudUIWindow
         }
     }
 
-    public void Close() => Screen.CloseScreen();
+    /// <summary>
+    /// 关窗。⚠️ 走这里关会**顺带还原被屏蔽的点击**；
+    ///    直接点右上角 X（MetaScreen 内部是 `Object.Destroy(obj)`）不会走这里 ——
+    ///    但 <see cref="UiModalGuard"/> 每帧会检查根节点是否还活着，销毁后会自动清理并还原 ✓
+    /// </summary>
+    public void Close()
+    {
+        DisableInputBlock();
+        Screen.CloseScreen();
+    }
+
+    // =====================================================================
+    //  输入屏蔽（"能点到背后的原版控件"的通用解法）
+    // =====================================================================
+
+    /// <summary>已登记的屏蔽根（= MetaWindow，不是 Screen）。null = 没开屏蔽。</summary>
+    private Transform? _blockRoot;
+
+    /// <summary>是否已经开了输入屏蔽。</summary>
+    public bool InputBlocked => _blockRoot != null;
+
+    /// <summary>
+    /// 开输入屏蔽：**把不属于本窗口的原版控件临时禁用**，并挂一个每帧 Sweep 驱动器。
+    ///
+    /// ⚠️ 屏蔽根取 <c>Screen.transform.parent</c>（MetaWindow）而不是 <c>Screen.transform</c> ——
+    ///    因为**关闭按钮 X 是 MetaWindow 的子物体、Screen 的兄弟**：
+    ///    用 Screen 当根的话，连我们自己的 X 都会被判成"不属于本窗口"而禁掉，窗口就关不掉了。
+    /// </summary>
+    public void EnableInputBlock()
+    {
+        try
+        {
+            if (_blockRoot != null) return;
+
+            _blockRoot = Screen != null ? Screen.transform.parent : null;
+            if (_blockRoot == null) { LightLogger.LogWarning("[HudUIWindow] 拿不到屏蔽根，输入屏蔽未生效"); return; }
+
+            UiModalGuard.Push(_blockRoot);
+
+            // 挂每帧驱动器 —— UiModalGuard.Sweep 必须每帧跑，否则只是算了一次
+            if (GameObject != null) GameObject.AddComponent<HudUIInputGuard>();
+
+            LightLogger.Log($"[HudUIWindow] 已开启输入屏蔽（根={_blockRoot.name}）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[HudUIWindow.EnableInputBlock]", ex);
+        }
+    }
+
+    /// <summary>
+    /// **把窗口子树里所有渲染器的 sortingOrder 抬到指定值。**
+    ///
+    /// ⚠️⚠️⚠️ **必须等窗口内容全部建完之后再调**（2026-10-06 日志实证，这是"窗口里啥也没有"的真根因）。
+    ///
+    ///  原来这段逻辑写在 <c>Create</c> 里 —— 而 `Create` 返回时**内容还没建**
+    ///  （调用方才开始 `AddText` / `HudUIButton.Create`）。
+    ///  于是日志里是这样：
+    /// <code>
+    ///   [1] Inner        sortingLayer='Default'/30000   ← 窗口自己的，设上了
+    ///   [3] BlackScreen  sortingLayer='Default'/30000   ← 黑幕也设上了
+    ///   [4] Text '预览…'  sortingLayer='Default'/0       ← ★ 后建的内容全是 0
+    ///   [8] HudUIButton   sortingLayer='Default'/0       ← ★ 被黑幕(30000)盖住
+    /// </code>
+    ///  **黑幕 30000、内容 0 → 整个窗口看起来就是一块空的暗板。**
+    ///
+    ///  所以拆成公开方法，由调用方在**建完内容之后**调一次。
+    /// </summary>
+    public void AscendSorting(int order = 30000)
+    {
+        try
+        {
+            var meta = Screen != null ? Screen.transform.parent : null;   // MetaWindow
+            if (meta == null) { LightLogger.LogWarning("[HudUIWindow] 找不到 MetaWindow，排序没设"); return; }
+
+            int groups = 0, renderers = 0;
+
+            // ① 嵌套 SortingGroup —— HudUIButton 自己挂了一个，会覆盖外层组的排序
+            foreach (var g in meta.GetComponentsInChildren<SortingGroup>(true))
+            {
+                if (g == null) continue;
+                g.sortingOrder = order;
+                groups++;
+            }
+
+            // ② 每个渲染器（TMP 的文字渲染器、SpriteRenderer…）
+            foreach (var r in meta.GetComponentsInChildren<Renderer>(true))
+            {
+                if (r == null) continue;
+                r.sortingOrder = order;
+                renderers++;
+            }
+
+            LightLogger.Log($"[HudUIWindow] 排序已抬：order={order}，" +
+                            $"{groups} 个 SortingGroup + {renderers} 个渲染器");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[HudUIWindow.AscendSorting] {ex.Message}");
+        }
+    }
+
+    /// <summary>关掉输入屏蔽并还原被禁用的原版控件。</summary>
+    public void DisableInputBlock()
+    {
+        try
+        {
+            if (_blockRoot == null) return;
+            UiModalGuard.Pop(_blockRoot);
+            _blockRoot = null;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[HudUIWindow.DisableInputBlock] {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// 把这个窗口里**所有**文字换成本模组的"简中字体模板"字体。
@@ -1095,4 +1337,40 @@ public class HudUIWindow
     }
 
     public void AddMargin(float height) => _currentY -= height;
+
+    /// <summary>
+    /// <see cref="HudUIWindow.EnableInputBlock"/> 的每帧驱动器。
+    ///
+    /// ⚠️ `UiModalGuard` 只负责**算出该禁用哪些控件**，真正干活的是每帧调用的 `Sweep()`。
+    ///    主菜单那边由 `MainMenuPatch`（**只在 MainMenu 场景**）驱动，
+    ///    大厅/设置界面**没有别人驱动** → 不挂这个的话屏蔽等于没开。
+    ///
+    /// ⚠️ 托管 MonoBehaviour 必须先 <c>ClassInjector.RegisterTypeInIl2Cpp&lt;T&gt;()</c>，
+    ///    否则 <c>AddComponent&lt;T&gt;()</c> 抛 TypeInitializationException（AGENTS.md §11.2）。
+    /// </summary>
+    public sealed class HudUIInputGuard : MonoBehaviour
+    {
+        static HudUIInputGuard()
+        {
+            try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<HudUIInputGuard>(); }
+            catch { }
+        }
+
+        /// <summary>每 N 帧强制全扫一次 —— Sweep 内部有"Buttons 数量没变就短路"的优化，
+        /// 而原版会自己把按钮 enabled 回来，所以要低频兜底。</summary>
+        private const int ForceSweepEvery = 20;
+
+        private int _tick;
+
+        private void Update()
+        {
+            try { UiModalGuard.Sweep(); } catch { }
+
+            if (++_tick >= ForceSweepEvery)
+            {
+                _tick = 0;
+                try { UiModalGuard.ForceSweep(); } catch { }
+            }
+        }
+    }
 }

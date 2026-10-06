@@ -61,6 +61,31 @@ public class GUITextField
     /// <summary>根对象</summary>
     public GameObject GameObject { get; }
 
+    /// <summary>
+    /// 设置文本。
+    /// ⚠️ 原来只有只读的 <see cref="Text"/>，外部想预填内容（比如"作者默认用玩家名"）没办法，
+    ///    所以补这个方法 —— 直接写 <c>Value</c> 即可，显示会在 <c>Update</c> 里自动跟上。
+    /// </summary>
+    public void SetText(string text)
+    {
+        try { _behaviour.Value = text ?? ""; }
+        catch (Exception ex) { LightLogger.LogWarning($"[GUITextField.SetText] {ex.Message}"); }
+    }
+
+    /// <summary>设置位置（手动排版时用）。</summary>
+    public void SetPosition(Vector3 localPos)
+    {
+        try { if (GameObject != null) GameObject.transform.localPosition = localPos; }
+        catch (Exception ex) { LightLogger.LogWarning($"[GUITextField.SetPosition] {ex.Message}"); }
+    }
+
+    /// <summary>主动聚焦 / 取消聚焦。</summary>
+    public void SetFocused(bool focused)
+    {
+        try { _behaviour.Focused = focused; }
+        catch (Exception ex) { LightLogger.LogWarning($"[GUITextField.SetFocused] {ex.Message}"); }
+    }
+
     private readonly TextFieldBehaviour _behaviour;
 
     private GUITextField(GameObject obj, TextFieldBehaviour behaviour)
@@ -90,9 +115,14 @@ public class GUITextField
             obj.transform.localPosition = Vector3.zero;
 
             // 背景
+            // ⚠️ 2026-10-06 换贴图（用户："这个输入框贴图哪来的，太丑了"）：
+            //    原来用 `VanillaAsset.PopUpBackSprite` —— 那是**弹窗的大底板**，
+            //    塞进这么小的输入框里又糊又花。
+            //    Nebula 用的是 `MetaScreen.GetButtonBackSprite()`（**按钮底图**）+ Tiled，
+            //    我们对应的就是 HudUIAssets.ButtonNormal。
             var renderer = obj.AddComponent<SpriteRenderer>();
-            renderer.sprite = VanillaAsset.PopUpBackSprite;
-            renderer.drawMode = SpriteDrawMode.Sliced;
+            renderer.sprite = Light.UI.HudUI.HudUIAssets.ButtonNormal;
+            renderer.drawMode = SpriteDrawMode.Tiled;
             renderer.tileMode = SpriteTileMode.Continuous;
             renderer.size = size;
 
@@ -121,11 +151,42 @@ public class GUITextField
             tmp.ForceMeshUpdate();
             behaviour.TMP = tmp;
 
+            // 光标：**独立一个 TMP**（Nebula 同款）——
+            //   把 "|" 拼进正文的话，光标永远停在最末尾、按方向键也不会动。
+            try
+            {
+                var pipe = Object.Instantiate(VanillaAsset.StandardTextPrefab, obj.transform);
+                pipe.transform.localPosition = new Vector3(0f, 0f, -1.5f);
+                pipe.rectTransform.pivot = new Vector2(0f, 0.5f);
+                pipe.rectTransform.sizeDelta = new Vector2(0.4f, size.y - 0.06f);
+                pipe.fontSize = 1.35f;
+                pipe.fontSizeMin = 1.35f;
+                pipe.fontSizeMax = 1.35f;
+                pipe.enableAutoSizing = false;
+                pipe.alignment = TextAlignmentOptions.Left;
+                pipe.raycastTarget = false;
+                pipe.text = "";
+                pipe.color = UnityEngine.Color.white;
+                pipe.ForceMeshUpdate();
+                behaviour.Pipe = pipe;
+            }
+            catch (Exception ex) { LightLogger.LogWarning($"[GUITextField] 光标 TMP 建立失败：{ex.Message}"); }
+
             // 点击聚焦
+            // ⚠️ 必须走 GetFocus()（会**先把上一个踢掉**）——
+            //   直接写 Focused = true 也行（那是个属性，内部就是 GetFocus），
+            //   但这里写明确一点，免得以后有人改成别的写法又踩回"两个一起输入"。
             var backColor = new Color(0.16f, 0.16f, 0.16f, 0.85f);
             var hoverColor = new Color(0.3f, 0.3f, 0.3f, 0.9f);
             var button = obj.SetUpButton(true, renderer, backColor, hoverColor, playSound: false);
-            button.OnClick.AddListener((UnityAction)(() => behaviour.Focused = true));
+            button.OnClick.AddListener((UnityAction)(() => behaviour.GetFocus()));
+
+            // 悬浮：不是当前焦点时给个绿边（Nebula 同款提示）
+            button.OnMouseOver.AddListener((UnityAction)(() =>
+            {
+                if (TextFieldBehaviour.ValidField != behaviour) renderer.color = UnityEngine.Color.green;
+            }));
+            button.OnMouseOut.AddListener((UnityAction)(() => renderer.color = UnityEngine.Color.white));
 
             var field = new GUITextField(obj, behaviour);
             field.EnterAction = onEnter;
@@ -164,7 +225,29 @@ public class GUITextField
 }
 
 /// <summary>
-/// 输入框行为组件：聚焦后每帧读取 Input.inputString 更新文本
+/// 输入框行为组件：聚焦后每帧读取 Input.inputString 更新文本。
+///
+/// ═══════════════════════════════════════════════════════════════════════
+///  【2026-10-06 照搬 Nebula 重写】
+///  用户："这俩输入框点一个再点一个还能一起输入的。你照搬 Nebula 的。"
+///
+///  关键就是 **<see cref="ValidField"/> 这个静态字段** —— 全工程同一时刻
+///  只允许一个输入框持有焦点：
+/// <code>
+///   GetFocus():   if (ValidField) ValidField.LoseFocus();   // 抢焦点前先踢掉上一个
+///                 ValidField = this;
+///   Update():     if (ValidField != this) { 只显示文本; return; }   // 每帧按它判定
+/// </code>
+///  原来我用的是实例字段 <c>Focused</c>，**每个输入框各管各的** →
+///  点第二个时第一个的 <c>Focused</c> 还是 true → 两边同时吃键盘输入。
+///
+///  其余照抄 Nebula <c>Nebula\Components\TextInputField.cs</c> 的部分：
+///    · 光标 <c>|</c> 用**独立的 TMP**，位置由 <c>textInfo.characterInfo[].bottomRight.x</c> 精确定位
+///      （原来是把 "|" 拼进文本里，光标永远在最右边，跟着输入跑不了）；
+///    · 左右方向键移动光标；
+///    · **Ctrl+V 粘贴**（用 Unity 自带的 <c>GUIUtility.systemCopyBuffer</c>，不引 Nebula 的 ClipboardHelper）；
+///    · 失焦时显示灰色提示文字。
+/// ═══════════════════════════════════════════════════════════════════════
 /// </summary>
 public class TextFieldBehaviour : MonoBehaviour
 {
@@ -180,46 +263,202 @@ public class TextFieldBehaviour : MonoBehaviour
         }
     }
 
+    /// <summary>★ 全工程**当前持有焦点的那一个**输入框。null = 没有。</summary>
+    public static TextFieldBehaviour? ValidField = null;
+
     public TextMeshPro? TMP;
-    public bool Focused;
+
+    /// <summary>光标用的独立 TMP。</summary>
+    public TextMeshPro? Pipe;
+
+    /// <summary>已输入的文本。</summary>
     public string Value = "";
+
+    /// <summary>空的时候显示的灰色提示。</summary>
     public string Hint = "";
+
+    /// <summary>光标位置（在 Value 里的下标）。</summary>
+    public int Cursor;
+
+    /// <summary>是否允许输入法（中文）。</summary>
+    public bool UseIME = true;
+
+    /// <summary>进入编辑前的全局 IME 模式（失焦时还原，避免影响原版聊天框的中文输入）。</summary>
+    private static IMECompositionMode _imeBefore = IMECompositionMode.Auto;
+    private static bool _imePushed;
+
+    private float _caretTimer;
+    private bool _caretOn;
+    private float _justFocused;      // 刚聚焦的宽限期，防止"点下去的那一下"立刻被判成失焦
+
+    /// <summary>
+    /// 是否持有焦点。
+    /// ⚠️ 它**不是**一个独立字段，而是 <see cref="ValidField"/> 的投影 ——
+    ///    这样才能保证"全工程只有一个 true"。
+    /// </summary>
+    public bool Focused
+    {
+        get => ValidField == this;
+        set { if (value) GetFocus(); else LoseFocus(); }
+    }
+
+    /// <summary>抢焦点：**先把上一个踢掉**（这就是单一焦点的全部秘密）。</summary>
+    public void GetFocus()
+    {
+        try
+        {
+            if (ValidField != null && ValidField != this) ValidField.LoseFocus();
+
+            ValidField = this;
+            if (UseIME)
+            {
+                // ⚠️ imeCompositionMode 是**全局**设置。关掉后原版聊天框的输入法也会一起失效
+                //    （表现：中文打不进去 / 被吞字）。所以进入编辑前先记住旧值，失焦时还原。
+                if (!_imePushed) { _imeBefore = Input.imeCompositionMode; _imePushed = true; }
+                Input.imeCompositionMode = IMECompositionMode.On;
+            }
+
+            Cursor = Value.Length;
+            _justFocused = 0.4f;
+            _caretTimer = 0.5f;
+            _caretOn = true;
+
+            LightLogger.LogDebug($"[TextFieldBehaviour] 聚焦 → {gameObject.name}");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[TextFieldBehaviour.GetFocus]", ex);
+        }
+    }
+
+    public void LoseFocus()
+    {
+        try
+        {
+            if (ValidField != this) return;
+
+            // 还原进入编辑前的 IME 模式（默认 Auto），别把全局输入法关掉
+            if (_imePushed)
+            {
+                Input.imeCompositionMode = _imeBefore;
+                _imePushed = false;
+            }
+            ValidField = null;
+            if (Pipe != null) Pipe.text = "";
+
+            LightLogger.LogDebug($"[TextFieldBehaviour] 失焦 ← {gameObject.name}");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[TextFieldBehaviour.LoseFocus]", ex);
+        }
+    }
+
+    /// <summary>把一串字符吃进 Value（支持退格 / 回车 / 光标处插入）。</summary>
+    public void AcceptText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        var result = Value;
+        foreach (char c in text)
+        {
+            if (c == '\b')
+            {
+                if (Cursor > 0 && result.Length > 0)
+                {
+                    result = result.Remove(Cursor - 1, 1);
+                    Cursor--;
+                }
+            }
+            else if (c == '\n' || c == '\r')
+            {
+                GUITextField.NotifyEnter(this);
+                LoseFocus();
+                break;
+            }
+            else if (c == '\u001b')      // Esc
+            {
+                LoseFocus();
+                break;
+            }
+            else if (!char.IsControl(c))
+            {
+                if (Cursor < result.Length) result = result.Insert(Cursor, c.ToString());
+                else result += c;
+                Cursor++;
+            }
+        }
+
+        Value = result;
+        if (Cursor > Value.Length) Cursor = Value.Length;
+        _caretTimer = 0.5f;
+        _caretOn = true;
+    }
 
     public void Update()
     {
         try
         {
-            if (!Focused) return;
+            bool isFocused = ValidField == this;
 
-            foreach (char c in Input.inputString)
+            // ---- 没焦点：只负责显示（提示 / 已有文本）----
+            if (!isFocused)
             {
-                if (c == '\r' || c == '\n')
-                {
-                    Focused = false;
-                    GUITextField.NotifyEnter(this);
-                }
-                else if (c == '\b')
-                {
-                    if (Value.Length > 0)
-                        Value = Value.Substring(0, Value.Length - 1);
-                }
-                else if (c == '\u001b')
-                {
-                    Focused = false;
-                }
-                else if (!char.IsControl(c))
-                {
-                    Value += c;
-                }
+                if (Pipe != null) Pipe.text = "";
+                ShowText();
+                return;
             }
 
-            if (TMP != null)
+            // ---- 有焦点 ----
+            if (_justFocused > 0f) _justFocused -= Time.deltaTime;
+            else if (Input.GetMouseButtonDown(0)) LoseFocus();   // 点别处就失焦
+
+            // Ctrl+V 粘贴
+            if ((Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
+                && Input.GetKeyDown(KeyCode.V))
             {
-                bool empty = Value.Length == 0;
-                TMP.text = empty ? Hint : Value;
-                TMP.color = empty ? UnityEngine.Color.gray : UnityEngine.Color.white;
-                TMP.ForceMeshUpdate();
+                try
+                {
+                    var clip = GUIUtility.systemCopyBuffer;
+                    if (!string.IsNullOrEmpty(clip)) AcceptText(clip);
+                }
+                catch { }
             }
+
+            // 左右方向键
+            if (Cursor > 0 && Input.GetKeyDown(KeyCode.LeftArrow))
+            {
+                Cursor--;
+                _caretTimer = 0.5f; _caretOn = true;
+            }
+            if (Input.GetKeyDown(KeyCode.RightArrow))
+            {
+                Cursor++;
+                _caretTimer = 0.5f; _caretOn = true;
+            }
+            if (Cursor > Value.Length) Cursor = Value.Length;
+
+            // 键盘输入
+            AcceptText(Input.inputString);
+
+            // 候选框跟随（中文输入法的候选窗要贴着输入框）
+            var camera = Camera.main;
+            if (camera != null && TMP != null)
+            {
+                try
+                {
+                    var screen = camera.WorldToScreenPoint(TMP.transform.position);
+                    Input.compositionCursorPos = new Vector2(screen.x, screen.y);
+                }
+                catch { }
+            }
+
+            // 光标闪烁
+            _caretTimer -= Time.deltaTime;
+            if (_caretTimer < 0f) { _caretTimer = 0.5f; _caretOn = !_caretOn; }
+
+            ShowText();
+            UpdateCaret();
         }
         catch (Exception ex)
         {
@@ -227,10 +466,76 @@ public class TextFieldBehaviour : MonoBehaviour
         }
     }
 
+    /// <summary>刷新正文（含输入法"组合中"的未提交文本）。</summary>
+    private void ShowText()
+    {
+        if (TMP == null) return;
+
+        string composition = Focused ? Input.compositionString : "";
+        bool empty = Value.Length == 0 && composition.Length == 0;
+
+        if (empty && !string.IsNullOrEmpty(Hint))
+        {
+            TMP.text = Hint;
+            TMP.color = UnityEngine.Color.gray;
+        }
+        else
+        {
+            // 组合中的文本插在光标处显示（但**不写进 Value**，等输入法提交）
+            string head = Cursor > 0 ? Value.Substring(0, Cursor) : "";
+            string tail = Cursor < Value.Length ? Value.Substring(Cursor) : "";
+            TMP.text = head + composition + tail;
+            TMP.color = UnityEngine.Color.white;
+        }
+        TMP.ForceMeshUpdate();
+    }
+
+    /// <summary>
+    /// 把光标 <c>|</c> 摆到真实字符位置上。
+    ///
+    /// ⚠️⚠️ 2026-10-06 修（用户："光标太歪了，我要实际跟着文本走"）：
+    ///   <c>textInfo.characterInfo[]</c> 里的坐标是**以正文 TMP 自己的 pivot 为原点**的，
+    ///   而正文 TMP 的 pivot 是 <c>(0, 0.5)</c> → **本地 x=0 就是它的左边缘**。
+    ///   它自身又摆在 <c>-size.x/2 + 0.15</c> 处。
+    ///
+    ///   我原来直接把 characterInfo 的 x 当父空间坐标写进 <c>Pipe.localPosition</c> ——
+    ///   于是差了"正文 TMP 左边缘"这一整段偏移，**光标永远飘在右边一大截**
+    ///   （而且是固定偏移，看起来就像完全没跟着文本走）。
+    ///
+    ///   正确：父空间 x = **正文物体自身的 localPosition.x** + characterInfo 的 x。
+    /// </summary>
+    private void UpdateCaret()
+    {
+        if (Pipe == null || TMP == null) return;
+
+        if (!_caretOn) { Pipe.text = ""; return; }
+        Pipe.text = "|";
+
+        try
+        {
+            var info = TMP.textInfo;
+            float local;
+
+            if (Cursor > 0 && info != null && info.characterCount >= Cursor)
+                local = info.characterInfo[Cursor - 1].bottomRight.x;
+            else if (info != null && info.characterCount > 0)
+                local = info.characterInfo[0].bottomLeft.x;
+            else
+                local = 0f;
+
+            float parentX = TMP.transform.localPosition.x + local;
+            Pipe.transform.localPosition = new Vector3(parentX, 0f, -1.5f);
+        }
+        catch { }
+    }
+
+    public void OnDisable() => LoseFocus();
+
     public void OnDestroy()
     {
         try
         {
+            LoseFocus();
             GUITextField.RemoveField(this);
         }
         catch (Exception ex)

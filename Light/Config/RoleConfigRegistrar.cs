@@ -31,12 +31,22 @@ internal static class RoleConfigRegistrar
                     .SetHeaderColor(role.Color.ToUnityColor());
 
                 // 通用配置：出现数量 / 出现概率
+                //
+                // ⚠️ 标签里**不要**再拼职业名（2026-10-06 用户要求）。
+                //    这些项永远出现在**该职业自己的配置块/详情页**里，块头/标题已经写了职业名，
+                //    再拼一遍就是"召集者 数量"这种重复（用户原话："把那个召集者删掉"）。
+                //
+                // ★ 但**悬停说明**要拼职业名，而且要**用职业自己的颜色**
+                //   （用户 2026-10-06："数量和概率显示的文字我要 '职业名最大出现的数量'
+                //     '职业名可能出现的概率'，其中职业名对应该职业的颜色"）。
+                //   说明文字走 TMP 富文本，所以直接塞 <color=#RRGGBB>。
+                string nameHex = RoleNameHex(role);
                 block.AddConfiguration(
                     $"role.{role.CodeName}.count", role.Allocation.MaxCount, 0, 15, 1,
-                    $"{role.Name} 数量", $"{role.Name} 的最大出现数量");
+                    "数量", $"<color=#{nameHex}>{role.Name}</color>最大出现的数量");
                 block.AddConfiguration(
                     $"role.{role.CodeName}.chance", role.Allocation.Chance, 0, 100, 5,
-                    $"{role.Name} 概率", $"{role.Name} 的出现概率")
+                    "概率", $"<color=#{nameHex}>{role.Name}</color>可能出现的概率")
                     .WithSuffix(ConfigSuffix.Percent);
 
                 // 职业专属配置（轻量项）
@@ -73,6 +83,19 @@ internal static class RoleConfigRegistrar
         }
     }
 
+    /// <summary>
+    /// 职业名在富文本里用的颜色（<c>#RRGGBB</c> 大写十六进制）。
+    /// 说明文字是 TMP 富文本，所以直接塞 <c>&lt;color=#RRGGBB&gt;</c> 就能给职业名单独上色。
+    /// </summary>
+    private static string RoleNameHex(RoleTemplate role)
+    {
+        try
+        {
+            var c = LightInDark.ColorHelper.ToUnityColor(role.Color);
+            return UnityEngine.ColorUtility.ToHtmlStringRGB(c);
+        }
+        catch { return "FFFFFF"; }
+    }
     private static int ToInt(object v) => v is int i ? i : Convert.ToInt32(v ?? 0);
     private static float ToFloat(object v) => v is float f ? f : Convert.ToSingle(v ?? 0f);
 

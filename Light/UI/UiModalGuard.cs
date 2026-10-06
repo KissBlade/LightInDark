@@ -103,6 +103,10 @@ public static class UiModalGuard
         _roots.Add(root);
         _knownOurs.Clear();       // 多了一个窗口，缓存全作废
         _lastListCount = -1;
+
+        // ★ 保证每帧有人在跑 Sweep —— 否则窗口被销毁后没人再调用它，
+        //   `AnyOpen` 里那句"根已死就还原"永远不执行，原版控件就锁死了（见上面的长注释）
+        EnsureDriver();
     }
 
     /// <summary>注销（窗口关闭/销毁时调用）。全部关完才还原被禁用的控件。</summary>
@@ -129,6 +133,40 @@ public static class UiModalGuard
     /// <summary>清空（场景切换兜底，防止跨场景残留把新场景的按钮全锁死）。</summary>
     public static void Clear() => Pop(null);
 
+    // =====================================================================
+    //  自驱动
+    //
+    //  ⚠️⚠️ 2026-10-06 踩坑（用户："原版控件会失效"）：
+    //    `Sweep()` 只负责**算出该禁用谁**，它必须**每帧被调用**才谈得上"还原"——
+    //    `AnyOpen` 里那句"根已死就 RestoreAll"也只有在 Sweep 跑起来时才有机会执行。
+    //
+    //    我原来把驱动器挂在**窗口物体**上（HudUIInputGuard）→
+    //    **点 X 关窗时窗口被 Destroy，驱动器跟着一起没了** →
+    //    Sweep 从此不再运行 → 已经禁用的原版控件**再也没有机会被还原**，
+    //    表现就是"关掉窗口后原版菜单点不动了"。
+    //
+    //    修法：驱动器放在 **DontDestroyOnLoad 的独立物体**上，由本类自己持有。
+    //    并且 `AnyOpen` 每次都会自愈重建（防止 §11.4 记的"DDOL 宿主会被反复销毁"）。
+    // =====================================================================
+
+    private static UiModalGuardDriver? _driver;
+
+    private static void EnsureDriver()
+    {
+        try
+        {
+            if (_driver != null) return;      // Unity 的 `!=` 能识别已销毁 → 会自动重建
+
+            var go = new GameObject("LightUiModalGuardDriver");
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            _driver = go.AddComponent<UiModalGuardDriver>();
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[UiModalGuard.EnsureDriver] {ex.Message}");
+        }
+    }
+
     /// <summary>当前是否有**真正在显示**的模态窗口。</summary>
     public static bool AnyOpen
     {
@@ -144,6 +182,11 @@ public static class UiModalGuard
                 if (!alive) { _roots.RemoveAt(i); _knownOurs.Clear(); continue; }
                 any = true;
             }
+
+            // 有窗口开着却没人驱动 Sweep → 重建驱动器
+            //（DDOL 宿主可能被场景切换干掉，见 §11.4；这里每次检查都会自愈）
+            if (any) EnsureDriver();
+
             if (!any && _roots.Count == 0) RestoreAll();
             return any;
         }
@@ -369,6 +412,42 @@ public static class UiModalGuard
         catch (Exception ex)
         {
             LightLogger.LogWarning($"[UiModalGuard.MakeBand] {name}: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>
+/// <see cref="UiModalGuard"/> 的**常驻**每帧驱动器。
+///
+/// ⚠️⚠️ 它必须挂在 <c>DontDestroyOnLoad</c> 的独立物体上，**不能挂在窗口物体上** ——
+///    2026-10-06 踩坑（用户："原版控件会失效"）：我原来把它挂在窗口上，
+///    点 X 关窗时窗口被 Destroy，驱动器跟着消失 → Sweep 不再运行 →
+///    已经禁用的原版控件**再也没有机会被还原** → 关掉窗口后原版菜单点不动了。
+///
+/// ⚠️ 托管 MonoBehaviour 必须先 <c>ClassInjector.RegisterTypeInIl2Cpp&lt;T&gt;()</c>（AGENTS.md §11.2）。
+/// </summary>
+public sealed class UiModalGuardDriver : MonoBehaviour
+{
+    static UiModalGuardDriver()
+    {
+        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<UiModalGuardDriver>(); }
+        catch { }
+    }
+
+    /// <summary>每 N 帧强制全扫一次（Sweep 内部有"Buttons 数量没变就短路"的优化，
+    /// 而原版会自己把按钮 enabled 回来，所以要低频兜底）。</summary>
+    private const int ForceSweepEvery = 20;
+
+    private int _tick;
+
+    private void Update()
+    {
+        try { UiModalGuard.Sweep(); } catch { }
+
+        if (++_tick >= ForceSweepEvery)
+        {
+            _tick = 0;
+            try { UiModalGuard.ForceSweep(); } catch { }
         }
     }
 }

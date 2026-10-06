@@ -38,6 +38,61 @@ namespace LightInDark.Roles
         /// <summary>击杀冷却（秒）。</summary>
         public virtual float KillCooldown => 20f;
 
+        // ---- 职业块(配置界面里的职业按钮)外观 ----
+        //  用户 2026-10-06 要求：职业块要有自己的底色，且"高光默认取对应阵营色，
+        //  中立则取该职业自己的颜色"。
+
+        /// <summary>
+        /// **职业块的底色（可选）**。返回 null = 自动（按阵营取色，见
+        /// <see cref="ResolveBlockColor"/>）。想给某个职业一个专属底色就重写它。
+        /// </summary>
+        public virtual LightInDark.Color? BlockColor => null;
+
+        /// <summary>
+        /// **职业块的悬浮/选中高光色**。返回 null = 自动（见 <see cref="ResolveBlockHighlight"/>）。
+        /// </summary>
+        public virtual LightInDark.Color? BlockHighlightColor => null;
+
+        /// <summary>
+        /// 职业块底色（已解析，一定非 null）。
+        /// 规则：显式 <see cref="BlockColor"/> 优先；否则按阵营给一个低饱和底色。
+        /// </summary>
+        public LightInDark.Color ResolveBlockColor()
+        {
+            if (BlockColor.HasValue) return BlockColor.Value;
+
+            // 底色刻意压暗/降饱和 —— 它是"块的面",不是"块的高光"，
+            // 直接拿阵营色会太跳，一屏按钮会糊成一片。
+            // ⚠️ RoleCategory 只有 3 个值（Crewmate/Impostor/Neutral）——
+            //    Modifier / Ghost 是 ConfigCategory 才有的，这里不该出现。
+            switch (RoleCategory)
+            {
+                case RoleCategory.Impostor: return new LightInDark.Color(0.30f, 0.10f, 0.12f, 0.92f);
+                case RoleCategory.Neutral: return new LightInDark.Color(0.16f, 0.17f, 0.19f, 0.92f);
+                default: return new LightInDark.Color(0.12f, 0.18f, 0.22f, 0.92f);   // 船员
+            }
+        }
+
+        /// <summary>
+        /// 职业块高光色（已解析，一定非 null）。
+        /// 规则：显式 <see cref="BlockHighlightColor"/> 优先；
+        /// 否则**中立阵营取该职业自己的 <see cref="Color"/>**，其余取阵营色。
+        /// </summary>
+        public LightInDark.Color ResolveBlockHighlight()
+        {
+            if (BlockHighlightColor.HasValue) return BlockHighlightColor.Value;
+
+            // ⚠️ 中立必须用职业自己的颜色（用户明确要求）：
+            //    中立里各职业差异极大(小丑/纵火犯/鹈鹕…)，统一给个灰色分不出来。
+            if (RoleCategory == RoleCategory.Neutral) return Color;
+
+            return RoleCategory switch
+            {
+                RoleCategory.Impostor => new LightInDark.Color(1.000f, 0.098f, 0.098f, 1f),   // #FF1919
+                _ => new LightInDark.Color(0.549f, 1.000f, 1.000f, 1f),                      // #8CFFFF 船员
+            };
+        }
+
         /// <summary>注册序号（RPC 用）。</summary>
         public int Id { get; internal set; }
 
@@ -87,8 +142,72 @@ namespace LightInDark.Roles
         /// <summary>职业专属配置项（键自动加 role.&lt;CodeName&gt;. 前缀；通用数量/概率由注册器附加）。</summary>
         public virtual RoleConfigItem[] RoleConfiguration => Array.Empty<RoleConfigItem>();
 
-        /// <summary>职业立绘（帮助详情左上角），null 不显示。</summary>
+        /// <summary>职业图标（显示在职业按钮左侧），null 只显示文字。</summary>
         public virtual UnityEngine.Sprite IconImage => null;
+
+        // =====================================================================
+        //  职业立绘（职业详情右侧那张半透明大图）
+        //
+        //  参考 Nebula（用户 2026-10-06 给的示例）：
+        //      ConfigurationHolder!.Illustration =
+        //          NebulaAPI.AddonAsset.GetResource("BigPic/MaskedDancer.png")?.AsImage(115f);
+        //  它那边叫 Illustration；**我们这边叫 RoleImage**（用户指定）。
+        //  用法见 Nebula Help.cs:492
+        //      outsideScreen.SetBackImage(assignable.ConfigurationHolder?.Illustration, 0.2f);
+        //                                                    ↑ 0.2 = **半透明**（"半透明立绘"）
+        //
+        //  我们等价的做法：给一个**资源路径**，由本属性按需加载成 Sprite。
+        //  路径相对 `Light.Resources`（即 `Light\Resources\` 下），例如 "BigPic/MaskedDancer.png"。
+        //  ⚠️ 115f 是和 Nebula 一致的 pixelsPerUnit。
+        // =====================================================================
+
+        /// <summary>
+        /// 职业立绘的资源路径（相对 <c>Light.Resources</c>，如 <c>"BigPic/MaskedDancer.png"</c>）。
+        /// 返回 null / 空 = 该职业没有立绘。
+        /// </summary>
+        public virtual string? RoleImagePath => null;
+
+        /// <summary>
+        /// **立绘加载钩子** —— 由主插件在启动时接上。
+        ///
+        /// ⚠️ 为什么要有这个钩子：本类在 **API 程序集**（LightInDark）里，而实际读图用的
+        ///    <c>Light.Utilities.ResourceHelper</c> 在**主插件程序集**（Light）里 ——
+        ///    API 不能反向引用主插件（会循环依赖）。所以走委托注入，
+        ///    和 <c>LightLogger.BepInExInfo</c> 是同一套做法。
+        ///    参数 = 相对 Light.Resources 的路径；返回 null 表示没这张图。
+        /// </summary>
+        public static Func<string, UnityEngine.Sprite?>? RoleImageLoader;
+
+        private UnityEngine.Sprite? _roleImage;
+        private bool _roleImageTried;
+
+        /// <summary>
+        /// 职业立绘（懒加载并缓存）。加载失败返回 null，调用方自己判空。
+        /// </summary>
+        public UnityEngine.Sprite? RoleImage
+        {
+            get
+            {
+                if (_roleImageTried) return _roleImage;
+                _roleImageTried = true;      // 只尝试一次，缺图不会每帧重试
+
+                try
+                {
+                    var path = RoleImagePath;
+                    if (!string.IsNullOrEmpty(path))
+                        _roleImage = RoleImageLoader?.Invoke(path);
+                }
+                catch (Exception ex)
+                {
+                    LightInDark.Core.LightLogger.LogDebug($"[RoleTemplate] 立绘加载失败 {CodeName} / {RoleImagePath}: {ex.Message}");
+                }
+
+                return _roleImage;
+            }
+        }
+
+        /// <summary>立绘的 pixelsPerUnit —— 和 Nebula 的 <c>AsImage(115f)</c> 保持一致。</summary>
+        public const float RoleImagePPU = 115f;
 
         // ---- 文案解析 ----
 

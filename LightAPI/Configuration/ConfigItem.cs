@@ -472,6 +472,9 @@ namespace LightInDark.Configuration
             _byKey[item.Key] = item;
             _all.Add(item);
             RegisterBlock(item.Block);
+
+            // 新增项也要挂上"变了就写预设"（PresetStore.Initialize 只能挂当时已有的那些）
+            PresetStore.HookItem(item);
         }
 
         /// <summary>按 Key 查找（找不到返回 null）。</summary>

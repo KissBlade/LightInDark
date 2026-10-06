@@ -1,4 +1,5 @@
-﻿using AmongUs.Data;
+using AmongUs.Data;
+using LightInDark.Core;              // LightLogger
 using LightInDark.Language;
 using LightInDark.Utilities;
 using System;
@@ -27,12 +28,12 @@ public class ChatControlPatch
         {
             string text = ChatCommands.PatchManager.HistoryManager.MoveUp();
             if (text != null)
-                __instance.freeChatField.textArea.SetText(text);
+                __instance.freeChatField.textArea.SetText(Sanitize(text));
         }
         else if (Input.GetKeyDown(KeyCode.DownArrow) && ChatCommands.PatchManager.HistoryManager.Count > 0)
         {
             string text = ChatCommands.PatchManager.HistoryManager.MoveDown();
-            __instance.freeChatField.textArea.SetText(text ?? "");
+            __instance.freeChatField.textArea.SetText(Sanitize(text ?? ""));
         }
         if(Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
         {
@@ -55,7 +56,22 @@ public class ChatControlPatch
                 ChatCommands.PatchManager.SendLocalMessage(Language.Translate(key: "April.joke1", fallback: "Happy birthday to you!"));
             }
         }
-        
+    }
+
+    /// <summary>
+    /// 清洗历史文本：去掉会让「删字留下孤立代理 / 零宽字符」的坏字符。
+    /// （历史可能来自旧版本、粘贴或其它玩家，而 SetText 不走输入校验，必须自己挡。）
+    /// </summary>
+    private static string Sanitize(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text ?? "";
+        var sb = new StringBuilder(text.Length);
+        foreach (char c in text)
+        {
+            if (char.IsSurrogate(c) || char.IsControl(c) || c == '\uFEFF') continue;
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 }
 [HarmonyPatch(typeof(FreeChatInputField), nameof(FreeChatInputField.UpdateCharCount))]
@@ -63,9 +79,29 @@ public class UpdateCharCountPatch
 {
     public static void Postfix(FreeChatInputField __instance)
     {
-        int length = __instance.textArea.text.Length;
-        __instance.charCountText.SetText(length <= 0 ? LightPlugin.ColorData.ChatText : $"{length}/{__instance.textArea.characterLimit}");
-        __instance.charCountText.enableWordWrapping = false;
+        try
+        {
+            // ⚠️ 2026-10-06 加空守卫（日志实证刷屏）：
+            //   `System.NullReferenceException ... at UpdateCharCountPatch.Postfix(...):line 67`
+            //   `UpdateCharCount` 在 Awake/Start 阶段就会被调用一次，
+            //   而那会儿 `textArea` / `charCountText` **可能还没赋值**（都是 private 字段）。
+            //   原来没守卫 → 每次开聊天框都抛一次，把日志刷爆（也容易掩盖真正的问题）。
+            if (__instance == null) return;
+
+            var area = __instance.textArea;
+            var counter = __instance.charCountText;
+            if (area == null || counter == null) return;
+
+            int length = (area.text ?? "").Length;
+            counter.SetText(length <= 0
+                ? LightPlugin.ColorData.ChatText
+                : $"{length}/{area.characterLimit}");
+            counter.enableWordWrapping = false;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[UpdateCharCountPatch] {ex.Message}");
+        }
     }
 }
 
