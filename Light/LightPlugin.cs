@@ -65,13 +65,6 @@ public partial class LightPlugin : BasePlugin
             catch { }
             try { Light.Diagnostics.ExceptionStackLogger.Hook(); } catch { }
 
-            // ⚠️⚠️ 顺序有意调整过：**先把设置读进来，再挂补丁**。
-            //    原来 PatchAll() 在前、LightSettingsData 赋值在后，于是补丁一挂上
-            //    就有可能在设置还是 null 的时候被调用（SplashManager.Update 每帧都会走
-            //    LoadPatch.Prefix，而它要读 SkipLoadAnimation）。
-            //    只要这两行之间任何一步抛异常，设置就永远是 null、补丁却已经在跑
-            //    → 每帧 NRE、卡在启动页进不去游戏（实测踩过）。
-            //    把赋值提前，从根上消掉这个时序窗口。
             LightSettingsData = LightSettings.LoadSettingData(); // 存设置（必须在 PatchAll 之前）
 
             Harmony.PatchAll(); // 鸿蒙
