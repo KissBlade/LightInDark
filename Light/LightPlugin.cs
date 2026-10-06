@@ -107,8 +107,6 @@ public partial class LightPlugin : BasePlugin
             // 依赖库释放
             try { Audio.NativeLibraryLoader.PrepareBass(); } catch { }
 
-            //try { RichTextInputPatch.SetupEmojiFallback(); } catch { }
-
             try { Audio.BassMusicPlayer.Ensure(); } catch { }
             ChatHistoryLogUtils.Init(); // 聊天历史记录。
 

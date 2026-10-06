@@ -89,7 +89,9 @@ public static class ChatRichTextPatch
             var srcTf = src.transform;
             var clone = Object.Instantiate(srcTf.gameObject, srcTf.parent);
             clone.name = "LightChatPreviewButton";
-            clone.SetActive(true);
+            // ★ 默认**隐藏**（用户要求）：建好先收起来，等 RefreshPreviewButton 判断"输入能渲染"再出现。
+            //   这样也不会在创建的瞬间闪一下。
+            clone.SetActive(false);
 
             // ★ 放在发送按钮**下面**（用户："你把预览按钮放发送下面吧"）
             float h = 0.42f;
@@ -137,7 +139,6 @@ public static class ChatRichTextPatch
             pb.OnClick.AddListener((UnityAction)(() => OpenPreview(field)));
 
             _previewButton = clone;
-            _previewLabel = FindLabel(clone);
             _previewPb = pb;
 
             // ---- 输入变化 → 刷新"能不能渲染" ----
@@ -162,33 +163,18 @@ public static class ChatRichTextPatch
         }
     }
 
-    private static TextMeshPro? _previewLabel;
     private static PassiveButton? _previewPb;
 
-    /// <summary>取按钮里的标签 TMP（第一个）。</summary>
-    private static TextMeshPro? FindLabel(GameObject go)
-    {
-        try
-        {
-            foreach (var t in go.GetComponentsInChildren<TextMeshPro>(true))
-                if (t != null) return t;
-        }
-        catch { }
-        return null;
-    }
-
     // =====================================================================
-    //  「能不能渲染」检测 → 亮 / 灭
+    //  「能不能渲染」检测 → 显示 / 隐藏
     //
     //  用户 2026-10-06："每输入一个 < 或 >，预览按钮检测能不能渲染出来，
-    //  如果能，那么就亮，如果不能，那就不亮。"
+    //  如果能，那么就亮，如果不能，那就不亮。"（2026-10-06 追加：不亮不要紧，**默认就不出现**）
     //
-    //  ⚠️ 检测手段：**让 TMP 自己解析一遍，再对比"解析后"和"原文"**：
-    //    · `<color=red>你好</color>` → 解析后 `你好` → **不相等 → 标签被吃掉了 → 能渲染** ✓
-    //    · `你好`                    → 解析后还是 `你好` → 相等 → 没标签，不用预览
-    //    · `<abc>你好`               → TMP 不认这个标签，**原样保留** → 相等 → 不算能渲染 ✓
-    //
-    //  这比"自己写正则匹配标签"可靠得多 —— **"认不认"是 TMP 说了算，不是我们说了算**。
+    //  ⚠️ 检测手段：**纯字符串扫描**（不创建任何 Unity 对象）——
+    //    早期版本造了个真 TextMeshPro 当探针，结果它自己成了场景里
+    //    "删不掉、只有一个、位置固定"的豆腐块（用户实测）。
+    //    现在按 TMP 支持的标签名白名单判断，够用且不可能留下痕迹。
     // =====================================================================
 
     /// <summary>
@@ -254,7 +240,13 @@ public static class ChatRichTextPatch
                 return false;
         }
     }
-    /// <summary>按当前输入刷新预览按钮的亮 / 灭。</summary>
+    /// <summary>
+    /// 按当前输入刷新预览按钮的**显示 / 隐藏**。
+    ///
+    /// 用户 2026-10-06："预览按钮默认不出现，只有输入框文本**可以渲染**时预览按钮才出现。"
+    ///   → 所以这里直接 <c>SetActive(canRender)</c>，不再用"灰色变暗"那套（暗着也还是占位置、还是能点）。
+    ///   ⚠️ 按钮隐藏时**照样能刷新** —— 监听挂在输入框的 <c>OnChange</c> 上，不在按钮上。
+    /// </summary>
     private static void RefreshPreviewButton(FreeChatInputField field)
     {
         try
@@ -266,16 +258,13 @@ public static class ChatRichTextPatch
 
             bool canRender = HasRenderableRichText(text);
 
-            if (_previewLabel != null)
-                _previewLabel.color = canRender
-                    ? UnityEngine.Color.white
-                    : new UnityEngine.Color(0.5f, 0.5f, 0.5f, 0.85f);
+            // 能渲染才出现；否则整个按钮收起来
+            try { _previewButton.SetActive(canRender); } catch { }
 
-            // ⚠️ **只改颜色，不关碰撞盒** —— 关掉的话点了彻底没反应；
-            //    而"灭"只是个视觉提示（点了也只会提示"没有可预览的标签"）。
-            if (_previewPb != null) _previewPb.enabled = true;
+            // 出现时必须是"能点的"（克隆体会继承原版"未聚焦就禁用"的状态）
+            if (canRender && _previewPb != null) _previewPb.enabled = true;
 
-            LightLogger.LogDebug($"[ChatRichText] 预览按钮 → {(canRender ? "亮" : "灭")}（{text.Length} 字）");
+            LightLogger.LogDebug($"[ChatRichText] 预览按钮 → {(canRender ? "显示" : "隐藏")}（{text.Length} 字）");
         }
         catch (Exception ex)
         {
