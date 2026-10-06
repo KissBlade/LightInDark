@@ -10,41 +10,26 @@ using UnityEngine.Networking;
 
 namespace LightInDark.Audio
 {
-    /// <summary>
-    /// 音效管理器。
-    /// 所有传入路径均为相对路径（如 "./Resources/SFX/Sth.mp3"），映射到打包进 dll 的嵌入资源
-    /// （Light 项目 RootNamespace=Light，资源目录 Resources\SFX\Sth.mp3 的嵌入资源名为
-    /// "Light.Resources.SFX.Sth.mp3"）。
-    ///
-    /// 解码方案：Unity 引擎原生解码（无第三方库）。
-    /// 嵌入资源字节先落盘到 %TEMP%\LightInDark\SFX 临时文件，再用
-    /// UnityWebRequestMultimedia.GetAudioClip(file://, AudioType.MPEG) 异步加载为 AudioClip，
-    /// 解码结果按路径缓存，之后重复播放直接复用。
-    /// </summary>
     public static class SfxManager
     {
-        // 程序集 → 嵌入资源名列表（懒扫描，可手动注册扩展程序集）
         private static readonly Dictionary<Assembly, string[]> _assemblyResources = new();
         private static bool _assembliesScanned;
 
-        // 相对路径 → 嵌入资源字节 / AudioClip 缓存 / 临时文件路径
         private static readonly Dictionary<string, byte[]> _resourceBytes = new();
         private static readonly Dictionary<string, AudioClip> _clipCache = new();
         private static readonly Dictionary<string, string> _tempFiles = new();
 
-        // 正在异步加载的路径（避免并发重复加载）
         private static readonly HashSet<string> _loading = new();
 
-        // 已确认缺失的路径（避免反复扫描与重复告警）
         private static readonly HashSet<string> _failed = new();
 
-        // 加载期间收到播放请求的路径（即使该加载是预热发起，完成后也要播放）
         private static readonly HashSet<string> _pendingPlay = new();
 
         private static SfxHost _host;
 
         /// <summary>
-        /// 播放相对路径音效。首次调用异步解码，解码完成后自动播放；之后直接复用缓存。
+        /// 播放相对路径音效。
+        /// 有bug，暂时不可用。
         /// </summary>
         /// <param name="relativePath">相对路径（如 "./Resources/SFX/Sth.mp3"），null/空/空白时静默忽略。</param>
         /// <param name="volume">音量（1 = 原音量）。</param>
@@ -64,7 +49,7 @@ namespace LightInDark.Audio
 
                 if (_loading.Contains(relativePath))
                 {
-                    _pendingPlay.Add(relativePath); // 加载完成后补播
+                    _pendingPlay.Add(relativePath);
                     return;
                 }
 
@@ -79,9 +64,6 @@ namespace LightInDark.Audio
             }
         }
 
-        /// <summary>
-        /// 同步检查相对路径音效是否存在（嵌入资源可读）。用于在替换原版音效前确认资源可用。
-        /// </summary>
         public static bool ResourceExists(string relativePath)
         {
             if (string.IsNullOrWhiteSpace(relativePath)) return false;
@@ -89,10 +71,6 @@ namespace LightInDark.Audio
             catch (Exception) { return false; }
         }
 
-        /// <summary>
-        /// 预热音效（只解码不播放）。用于按钮创建时预热点击/冷却音效，避免首次播放的异步延迟。
-        /// 已在缓存/加载中/资源缺失时均安全忽略。
-        /// </summary>
         public static void Warmup(string relativePath)
         {
             if (string.IsNullOrWhiteSpace(relativePath)) return;
@@ -154,7 +132,6 @@ namespace LightInDark.Audio
                 yield break;
             }
 
-            // 注意：IL2CPP 环境下 UnityWebRequest 不实现 IDisposable，不能使用 using
             var request = UnityWebRequestMultimedia.GetAudioClip(new Uri(filePath).AbsoluteUri, AudioType.MPEG);
             yield return request.SendWebRequest();
 
@@ -163,14 +140,12 @@ namespace LightInDark.Audio
                 if (request.result == UnityWebRequest.Result.Success)
                 {
                     var handler = request.downloadHandler as DownloadHandlerAudioClip;
-                    // IL2CPP 生成器把 Unity 属性 clip 重命名为 audioClip
                     var clip = handler != null ? handler.audioClip : null;
                     if (clip != null)
                     {
                         clip.name = Path.GetFileNameWithoutExtension(relativePath);
                         _clipCache[relativePath] = clip;
 
-                        // 播放条件：本次调用要求播放，或加载期间收到过播放请求（预热后立刻被 Play）
                         bool shouldPlay = playWhenReady || _pendingPlay.Remove(relativePath);
                         if (shouldPlay) PlayClip(clip, volume, pitch);
                     }
@@ -234,9 +209,9 @@ namespace LightInDark.Audio
         private static byte[] GetBytes(string relativePath)
         {
             if (_resourceBytes.TryGetValue(relativePath, out var cached)) return cached;
-            if (_failed.Contains(relativePath)) return null; // 已确认缺失
+            if (_failed.Contains(relativePath)) return null;
 
-            var normalized = Normalize(relativePath); // "./Resources/SFX/Sth.mp3" → "Resources.SFX.Sth.mp3"
+            var normalized = Normalize(relativePath);
             EnsureAssemblies();
 
             foreach (var kv in _assemblyResources)
@@ -256,7 +231,7 @@ namespace LightInDark.Audio
                 }
             }
 
-            _failed.Add(relativePath); // 全部程序集均未命中，标记缺失
+            _failed.Add(relativePath);
             return null;
         }
 

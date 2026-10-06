@@ -29,12 +29,20 @@ public partial class LIDPlugin : BasePlugin
     public static string AUVersion;
     public override void Load()
     {
+        // ⚠️ 把 BepInEx 日志源接到 LightLogger（非 Info 级别**同步**转发）。
+        //    主插件也会接一次（覆盖这里）—— 两边都接是为了"只装 API 时也能转发"。
+        try
+        {
+            LightLogger.BepInExInfo = m => Log.LogInfo(m);
+            LightLogger.BepInExWarning = m => Log.LogWarning(m);
+            LightLogger.BepInExError = m => Log.LogError(m);
+        }
+        catch { }
         try
         {
             Harmony.PatchAll();
             LidRpcRegistry.ScanAndPatch(Harmony);
             EventSystem.RegisterAssembly(typeof(LIDPlugin).Assembly);
-            // 场景切换事件：监听 UNITY activeSceneChanged，切换后触发 EventSystem 事件
             UnityEngine.SceneManagement.SceneManager.add_activeSceneChanged((Action<Scene, Scene>)((prev, next) =>
             {
                 try { EventTriggers.OnSceneChanged(prev.name, next.name); }
@@ -78,7 +86,7 @@ public static class GameManager_StartGame_Patch
     {
         try
         {
-            LightLogger.Log("[游戏] 游戏开始，初始化 GameManager");
+            LightLogger.Log("[游戏] 初始化 GameManager");
             Game.GameManager.Instance.Initialize();
             EventTriggers.OnGameStart(PlayerControl.AllPlayerControls.Count);
         }

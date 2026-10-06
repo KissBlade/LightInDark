@@ -132,7 +132,7 @@ public static class MainMenuPatch
             _lightScreen = null;
             _lightSubScreen = null;
             _bgPanel = null;
-            LightLogger.LogWarning("[Light.UI] === 开始布局 ===");
+            LightLogger.LogWarning("开始布局");
 
             VanillaAsset.Preload();
             var modStamp = FindGO("ModStamp");
@@ -143,12 +143,10 @@ public static class MainMenuPatch
                 var sr = modStamp.GetComponent<SpriteRenderer>();
                 sr?.sprite = ResourceHelper.LoadSpriteFromResource("Light.Resources.ModStamp.png");
             }
-            // 背景上移动画只在"首次进入主菜单"执行一次；之后进入不再上移
             _bgMoved = _bgInitialMoveDone;
             _bgMoveDelay = 0f;
-            // BackgroundTexture（会移动上去的那个）只在首次进入主菜单出现；之后再次进入直接不显示、不移动
             var bg = FindGO("BackgroundTexture");
-            if (bg != null) bg.SetActive(!_bgInitialMoveDone);
+            bg?.SetActive(!_bgInitialMoveDone);
 
             var btns = FindButtons();
 
@@ -259,7 +257,7 @@ public static class MainMenuPatch
 
             LightLogger.LogWarning("[Light.UI] === 布局完成 ===");
 
-            // 制作人员/退出：在“LIGHT”下方一个间距处对齐（LIGHT 已占据“设置”下方一格）
+            // 制作人员/退出
             if (btns.TryGetValue("LightButton", out var lBtn) && lBtn != null &&
                 btns.TryGetValue("AcountButton", out var aBtn) && aBtn != null &&
                 btns.TryGetValue("CreditsButton", out var cBtn) && cBtn != null)
@@ -284,7 +282,7 @@ public static class MainMenuPatch
                 __instance.StartCoroutine(CoCheckUpdater().WrapToIl2Cpp());
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             LightLogger.LogWarning("[Light.UI] 异常: " + ex);
         }
@@ -297,8 +295,6 @@ public static class MainMenuPatch
         yield return null;
         try
         {
-            // ⚠️ 更新器统一放在 <游戏根目录>\Light_Data\Tools（见 LightToolManager），
-            //    不再是游戏根目录。正常启动时加载页会把缺失的那个自动下载下来。
             string updaterPath = VersionMaker.UpdaterExePath;
             if (!File.Exists(updaterPath))
             {
@@ -514,11 +510,6 @@ public static class MainMenuPatch
     }
 
 #if !DEBUG
-    /// <summary>
-    /// Release 构建专用：「练习模式」(FreePlay) 与「玩法说明」(HowToPlay) 原本左右并列，
-    /// 这里把练习模式整个去掉，并把玩法说明挪到两者原来的中点，保持居中。
-    /// （Debug 构建保留原样，方便开发时用练习模式。）
-    /// </summary>
     private static void RemoveFreePlayAndCenterHowToPlay(MainMenuManager __instance)
     {
         try
@@ -600,21 +591,9 @@ public static class MainMenuPatch
         EnforceHowToPlayX("每帧");
     }
 
-    // ── 永久屏蔽主菜单的 EjectButtonMenu（原版那个"弹射"按钮）─────────────────
     private static GameObject? _ejectMenu;
     private static bool _ejectMenuLoggedHide;
 
-    /// <summary>
-    /// 一出现就立刻关掉 <c>MainMenuManager/MainUI/AspectScaler/EjectButtonMenu</c>。
-    ///
-    /// 为什么用"每帧检查"而不是"延迟隐藏"：要求是**一出现就关、永远不想看见**。
-    /// 原版至少有 3 条路径把它 SetActive(true)（MainMenuManager.Awake / ActivateMainMenuUI /
-    /// EjectMainMenu 协程里翻 ejectButton），只堵一条必漏；而 LateUpdate 在**渲染之前**执行，
-    /// 所以在这里关掉，它连一帧都不会被画出来。
-    ///
-    /// 只关 GameObject，不动 EjectMainMenu 组件 —— 原版是先 SetActive(true) 再调 StartEjectButton()，
-    /// 我们同帧关掉只会让协程随之中止，不会出现在 inactive 对象上 StartCoroutine 的报错。
-    /// </summary>
     [HarmonyPatch(typeof(MainMenuManager), "LateUpdate")]
     [HarmonyPostfix]
     public static void SuppressEjectMenu_Postfix(MainMenuManager __instance)
@@ -703,18 +682,11 @@ public static class MainMenuPatch
             var child4 = GetChild(_lightScreen.transform, 4);
             if (child4 != null) Object.Destroy(child4.gameObject);
 
-            // ⚠️ 兜底隐藏「兑换奖励」。
-            //    上面按**子物体序号 4** 找它，但序号会随预制体结构调整而错位（越界时
-            //    GetChild 返回 null，两个 `?.` / `if` 保护会**静默跳过**）。
-            //    实测它仍然显示出来，而且和我们新加的「更换背景图」叠在一起
-            //    （用户看到的就是三个按钮互相压）。
-            //    这里按**文字**再兜一次（后面还有按"是不是我建的"兜底，见 HideExtraButtons）。
             HideButtonByText(_lightScreen, "兑换");
 
             var temp = GetChild(_lightScreen.transform, 3);
             if (temp == null) return;
             int index = 0;
-            // 记录我们自己创建的按钮，等下用它把预制体自带的杂项按钮摘掉
             var mine = new List<GameObject>();
 
             void SetUpBtn(string text, System.Action clickAction)
@@ -747,9 +719,6 @@ public static class MainMenuPatch
             SetUpBtn("关于模组", () => HelpScreen.TryOpenHelpScreen());
             SetUpBtn("成就", () => LightLogger.LogWarning("[Light] 成就 - 待实现"));
             SetUpBtn("Discord", () => Application.OpenURL("https://discord.gg/"));
-
-            // 【新增】更换背景图 —— 打开模态面板（用户要求：Light 主界面变成 6 个按钮）
-            // 2 列布局下 index 4/5 正好是第三排的两个，不会多出一行。
             SetUpBtn("更换背景图", () =>
             {
                 if (_lightScreen != null) _lightScreen.SetActive(false);
@@ -762,11 +731,6 @@ public static class MainMenuPatch
                 if (_lightSubScreen != null) _lightSubScreen.SetActive(true);
             });
 
-            // ⚠️ 最后兜一刀：把这个克隆面板里**所有不是我们建的**按钮全部藏掉。
-            //    为什么不靠子物体序号：序号会错位，而且越界时 GetChild 返回 null、
-            //    外面那几层空引用保护会**静默跳过** → 那个「兑换奖励」就留在界面上，
-            //    跟我们新加的「更换背景图」「更多功能」互相叠压（用户实际看到的现象）。
-            //    "凡不是我建的就关掉"不依赖任何序号/文字，最稳。
             HideExtraButtons(_lightScreen, mine);
 
             var scalerList = Object.FindObjectOfType<SlicedAspectScaler>();
@@ -782,16 +746,6 @@ public static class MainMenuPatch
         }
     }
 
-    /// <summary>
-    /// 把这个克隆面板里**所有不是我们建的**按钮藏掉。
-    ///
-    /// 背景：LightScreen 是从原版 <c>accountButtons</c> 克隆的，预制体自带若干按钮
-    /// （其中一个叫「兑换奖励」）。原代码靠 <c>GetChild(transform, 4)</c> 定位并销毁它，
-    /// 但**子物体序号会错位**，越界时 <c>GetChild</c> 返回 null，外面两层空引用保护
-    /// 会静默跳过 → 那个按钮留在界面上，和新加的按钮叠在一起。
-    ///
-    /// 这里改成"**凡不是我建的就关掉**"，不依赖序号也不依赖文字。
-    /// </summary>
     private static void HideExtraButtons(GameObject root, List<GameObject> mine)
     {
         try
@@ -815,11 +769,7 @@ public static class MainMenuPatch
 
                 go.SetActive(false);
                 hidden++;
-                LightLogger.Log($"[Light] 已隐藏 LightScreen 里多余的按钮：{go.name}" +
-                                (string.IsNullOrEmpty(label) ? "" : $"（文字「{label}」）"));
             }
-            if (hidden > 0)
-                LightLogger.Log($"[Light] 共隐藏 {hidden} 个多余按钮（保留自建 {mine.Count} 个）");
         }
         catch (Exception ex)
         {
@@ -1070,29 +1020,112 @@ public static class MainMenuPatch
         }
     }
 
+    /// <summary>
+    /// 每帧驱动入口 —— **由两个驱动源共同调用**：
+    ///   ① 本方法（挂在 <c>MainMenuManager.LateUpdate</c> 的 Postfix）—— **只在 MainMenu 场景有效**
+    ///   ② <see cref="Light.Utilities.LightTicker"/>（DontDestroyOnLoad 常驻）—— 任何场景都在
+    ///
+    /// ⚠️⚠️ **为什么必须加第二个驱动源**（2026-10-05 实机定位）：
+    ///   `MainMenuManager` **只存在于 MainMenu 场景** —— MatchMaking（"本地"）的主控是
+    ///   `MMOnlineManager`，FindAGame（"搜索游戏"）又是另一个。所以只靠这个补丁的话，
+    ///   下面 `TickAll` 里那些 `sceneName == "MatchMaking"` / `"FindAGame"` 判断
+    ///   **全是死代码**，在那两个场景里 `Tick()` 根本不会被调用 ——
+    ///   用户报的「打开本地/搜索游戏后没有背景图、也没有音频」就是这么来的：
+    ///   **不是被关掉了，是从没启动过。**
+    /// </summary>
     [HarmonyPatch(typeof(MainMenuManager), "LateUpdate")]
     [HarmonyPostfix]
-    public static void LateUpdate()
+    public static void LateUpdate() => TickAll("MainMenuManager.LateUpdate");
+
+    /// <summary>上一帧跑过的帧号（"同一帧只跑一次"的守卫）。</summary>
+    private static int _lastTickFrame = -1;
+
+    // =====================================================================
+    //  诊断（2026-10-05 用户报「本地 / 搜索游戏没有背景图」时加的）
+    //  ⚠️ 目的：让用户跑一次就能从 LightLog.log 看出
+    //    ① 这个每帧入口到底有没有被调用；② 是哪个驱动源调用的；③ 场景名对不对。
+    //  节流：每个场景最多 6 条、每条至少间隔 300 帧（≈5 秒）。
+    // =====================================================================
+    private const int TickDiagMaxPerScene = 6;
+    private const int TickDiagFrameGap = 300;
+    private static string _tickDiagScene = "";
+    private static int _tickDiagCount;
+    private static int _tickDiagLastFrame = -100000;
+
+    /// <summary>节流地打一行「TickAll 被调用了」。绝不能抛异常（它自己在每帧路径上）。</summary>
+    private static void DiagTickAll(string driver, bool skippedByFrameGuard)
     {
         try
         {
+            string scene = SafeActiveSceneName();
+
+            // 换场景 → 计数归零并**立刻**打一条（保证"进这个场景了"一定能看到）
+            bool sceneChanged = scene != _tickDiagScene;
+            if (sceneChanged)
+            {
+                _tickDiagScene = scene;
+                _tickDiagCount = 0;
+                _tickDiagLastFrame = -100000;
+            }
+
+            if (!sceneChanged)
+            {
+                if (_tickDiagCount >= TickDiagMaxPerScene) return;
+                if (UnityEngine.Time.frameCount - _tickDiagLastFrame < TickDiagFrameGap) return;
+            }
+
+            _tickDiagLastFrame = UnityEngine.Time.frameCount;
+            _tickDiagCount++;
+
+            var sceneName = scene;
+            bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
+
+            LightLogger.Log($"[TickAll#{_tickDiagCount}/{TickDiagMaxPerScene}] driver={driver} " +
+                            $"scene='{sceneName}' isMainOrMatch={isMainOrMatch} " +
+                            $"frame={UnityEngine.Time.frameCount} skippedByFrameGuard={skippedByFrameGuard} " +
+                            $"tickerAlive={Light.Utilities.LightTicker.IsRunning} " +
+                            $"bgSelected='{BackgroundStore.Selected}' bgFail='{BackgroundRenderer.LastFailReason}'");
+        }
+        catch { }
+    }
+
+    /// <summary>当前场景名（读不到就返回 "?"，绝不抛）。</summary>
+    private static string SafeActiveSceneName()
+    {
+        try { return UnityEngine.SceneManagement.SceneManager.GetActiveScene().name; }
+        catch { return "?"; }
+    }
+
+    /// <summary>真正干活的每帧入口（两个驱动源共用）。</summary>
+    /// <param name="driver">谁调进来的（只用于诊断日志）。</param>
+    public static void TickAll(string driver = "unknown")
+    {
+        // ⚠️ 同一帧只跑一次：MainMenu 场景里补丁和 LightTicker 都会调进来，
+        //    不去重的话 TickInput() 那种鼠标轮询会被处理两次 → 一次点击算两下。
+        if (UnityEngine.Time.frameCount == _lastTickFrame)
+        {
+            DiagTickAll(driver, skippedByFrameGuard: true);
+            return;
+        }
+        _lastTickFrame = UnityEngine.Time.frameCount;
+        DiagTickAll(driver, skippedByFrameGuard: false);
+
+        try
+        {
             var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
-            // ⚠️⚠️ **不再包含 MatchMaking**（2026-10-04，用户实测「创建游戏连线区失败」）。
-                //   实测：同一 MOD、同一段代码，换服务器就能建房成功（NikoCN1 成功、其余全失败）。
-                //   说明 MOD 没有破坏建房协议，而是**在 MatchMaking 场景里每帧抢主线程**：
-                //   BackgroundRenderer.Tick / MainMenuButtonStyler.Apply / UiModalGuard.Sweep
-                //   都会在这里跑，而原版建房流程是「发 HostGame → 等服务器回 GameId，15 秒超时」
-                //   （见 InnerNetClient.WaitWithTimeout），主线程被拖住就可能等不到回包
-                //   → GameId 恒为 0 → LastCustomDisconnect = "创建游戏连线区失败…"。
-                //   区域选择/建房界面本来就不需要主界面改造，限制回 MainMenu。
-                bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
+            // ⚠️ 这三个场景是"主界面家族"：MainMenu（主菜单）、MatchMaking（本地/连线区选择）、
+            //    FindAGame（搜索游戏）。**背景图在这三个里都要显示**（用户要求），
+            //    而且音频要连续 —— 见 BackgroundRenderer.IsInMenuScene() 的注释。
+            //    注意这条判断在 TickAll 里是**死代码**的历史已经结束：现在由
+            //    LightTicker（DontDestroyOnLoad 常驻）驱动，任何场景都会调进来。
+            bool isMainOrMatch = sceneName == "MainMenu" || sceneName == "MatchMaking";
 
             // 自定义背景（新实现）。
             // 旧实现靠"DontDestroyOnLoad + 世界坐标写死 z=520"，
             // 于是必须在这里补一堆"进别的场景就 SetActive(false) + 缩到 0.0001"的补丁去藏，
             // 而且相机一挪动它就跑出视锥 → "莫名其妙消失"。
             // 现在 BackgroundRenderer 不用 DontDestroyOnLoad（场景卸载自动销毁，不可能外泄），
-            // 并且每帧跟随相机（永远在视野里、永远在 UI 后面）。见该类注释。
+            // 并且每帧跟随相机（永远在视野里、永远在所有 UI 后面）。见该类注释。
             if (!isMainOrMatch)
             {
                 BackgroundRenderer.Shutdown();
@@ -1102,7 +1135,21 @@ public static class MainMenuPatch
                 return;
             }
 
+            // ① 背景：三个场景都要（这是用户要的那一件事）
             BackgroundRenderer.Tick();
+
+            // ② 下面这些是**主界面专有**的改造 —— 右侧面板滑入 / Light 屏 / 按钮贴图 /
+            //    呼吸效果 /「更换背景图」面板 / 把原版 BackgroundTexture 推走。
+            //
+            //    ⚠️⚠️ 为什么在这里**刻意收窄**（2026-10-04 的实测教训，别删这段注释）：
+            //    在 MatchMaking 里每帧跑这些曾导致「创建游戏连线区失败」——
+            //    原版建房流程是「发 HostGame → 等服务器回 GameId，15 秒超时」
+            //    （InnerNetClient.WaitWithTimeout），主线程被拖住就可能等不到回包
+            //    → GameId 恒为 0 → LastCustomDisconnect = "创建游戏连线区失败…"。
+            //    在那两个场景里这些调用本来也全是空转（面板不存在、按钮集合为空、
+            //    呼吸效果没注册过任何按钮），所以收窄既不影响功能、又不会重蹈覆辙。
+            if (sceneName != "MainMenu") return;
+
             BackgroundPanel.Active?.TickInput();
 
             // 按钮样式：设置变了才真的重刷（Apply 内部有变化检测，每帧调代价极小）
@@ -1333,8 +1380,9 @@ public static class MainMenuPatch
         try
         {
             if (ev == null) return;
-            // ⚠️ 同上：不再包含 MatchMaking，理由见上面那一处。
-                bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
+            // 和 TickAll 保持同一套"主界面家族"判断（MainMenu / MatchMaking / FindAGame），
+            // 否则切到 FindAGame 时会把刚建好的背景 Shutdown 掉。
+            bool isMainOrMatch = ev.NextSceneName == "MainMenu" || ev.NextSceneName == "MatchMaking";
 
             if (!isMainOrMatch)
             {
