@@ -306,10 +306,11 @@ public static class HudUIAssets
             }
         }
     }
-    public static Sprite NavLeftNormal => NavButtonSprites[0];
-    public static Sprite NavLeftHover => NavButtonSprites[1];
-    public static Sprite NavRightNormal => NavButtonSprites[2];
-    public static Sprite NavRightHover => NavButtonSprites[3];
+    // 精灵图布局：左列 = 悬浮/点击态，右列 = 默认态；上排 = 左箭头，下排 = 右箭头
+    public static Sprite NavLeftHover => NavButtonSprites[0];
+    public static Sprite NavLeftNormal => NavButtonSprites[1];
+    public static Sprite NavRightHover => NavButtonSprites[2];
+    public static Sprite NavRightNormal => NavButtonSprites[3];
 
     // GUI/Background_Frame.png — 九宫格
     private static Sprite? _frameSprite;

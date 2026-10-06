@@ -185,27 +185,49 @@ public class TextFieldBehaviour : MonoBehaviour
     public string Value = "";
     public string Hint = "";
 
+    // IME 是否已开启，用于仅在聚焦状态变化时切换
+    private bool _imeOn;
+
+    // 切换聚焦状态并同步 IME
+    private void SetFocused(bool focused)
+    {
+        if (Focused == focused) return;
+        Focused = focused;
+        _imeOn = focused;
+        Input.imeCompositionMode = focused ? IMECompositionMode.On : IMECompositionMode.Off;
+    }
+
     public void Update()
     {
         try
         {
+            // 外部（点击）改变 Focused 时同步 IME
+            if (Focused != _imeOn)
+            {
+                _imeOn = Focused;
+                Input.imeCompositionMode = Focused ? IMECompositionMode.On : IMECompositionMode.Off;
+            }
+
             if (!Focused) return;
 
+            // 已提交字符
             foreach (char c in Input.inputString)
             {
                 if (c == '\r' || c == '\n')
                 {
-                    Focused = false;
+                    SetFocused(false);
                     GUITextField.NotifyEnter(this);
+                    break;
                 }
-                else if (c == '\b')
+                if (c == '\b')
                 {
                     if (Value.Length > 0)
                         Value = Value.Substring(0, Value.Length - 1);
                 }
                 else if (c == '\u001b')
                 {
-                    Focused = false;
+                    SetFocused(false);
+                    break;
                 }
                 else if (!char.IsControl(c))
                 {
@@ -213,10 +235,25 @@ public class TextFieldBehaviour : MonoBehaviour
                 }
             }
 
+            // 组合中文本（未提交），仅显示不写入 Value
+            string composition = Input.compositionString;
+
+            // 候选框跟随输入框（Unity 屏幕坐标，原点左下）
+            var camera = Camera.main;
+            if (camera != null && TMP != null)
+            {
+                var screen = camera.WorldToScreenPoint(TMP.transform.position);
+                Input.compositionCursorPos = new Vector2(screen.x, screen.y);
+            }
+
             if (TMP != null)
             {
-                bool empty = Value.Length == 0;
-                TMP.text = empty ? Hint : Value;
+                bool empty = Value.Length == 0 && composition.Length == 0;
+                string display = empty ? Hint : Value + composition;
+                // 聚焦时光标闪烁
+                if (Focused && Mathf.PingPong(Time.unscaledTime, 1f) > 0.5f)
+                    display += "|";
+                TMP.text = display;
                 TMP.color = empty ? UnityEngine.Color.gray : UnityEngine.Color.white;
                 TMP.ForceMeshUpdate();
             }
@@ -231,6 +268,7 @@ public class TextFieldBehaviour : MonoBehaviour
     {
         try
         {
+            SetFocused(false);
             GUITextField.RemoveField(this);
         }
         catch (Exception ex)

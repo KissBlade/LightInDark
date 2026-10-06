@@ -612,6 +612,8 @@ public static class LoadPatch
         {
             var f = Light.UI.Window.MenuTextTemplate2.Font;
             LightLogger.Log($"[Load] 简中字体 = {(f != null ? f.name : "未找到")}");
+
+            Light.UI.Window.CjkFont.EnsureFallback();
         }
         catch (Exception ex)
         {

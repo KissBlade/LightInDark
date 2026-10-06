@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using LightInDark;
 using LightInDark.Configuration;
+using LightInDark.Core;
 using LightInDark.Game;
 using LightInDark.Language;
 using LightInDark.Roles;
@@ -10,7 +11,6 @@ using LightInDark.UI.Window;
 using Light.UI.HudUI;
 using Light.UI.Window;
 using UnityEngine;
-using LightInDark.Core;
 using Color = LightInDark.Color;
 using FontStyle = LightInDark.UI.Window.FontStyle;
 using LightGameManager = LightInDark.Game.GameManager;
@@ -21,25 +21,28 @@ namespace Light.UI.Help;
 
 /// <summary>
 /// H 键帮助菜单
+/// 左侧页签栏 + 右侧内容，两栏布局
 /// </summary>
 public static class HelpScreen
 {
-    /// <summary>帮助页签（位掩码，配合 GetValidTabs）</summary>
+    /// <summary>帮助页签（位掩码）</summary>
     [Flags]
     public enum HelpTab
     {
         Search = 1, MyInfo = 2, Roles = 4, Overview = 8, Options = 16,
-        Slides = 32, Achievements = 64, Stamps = 128,
+        Achievements = 64, Stamps = 128,
     }
 
-    /// <summary>窗口尺寸（高度 4.1 + 0.6）</summary>
+    /// <summary>窗口尺寸</summary>
     private static readonly Vector2 HelpSize = new(7.8f, 4.7f);
 
     private static MetaScreen? _lastScreen;
+    private static GameObject? _windowRoot;      // 帮助窗口根节点（供模态遮罩登记/注销）
+    private static MetaScreen? _detailWindow;    // 职业详情二级窗口（ESC 优先关闭）
     private static HelpTab _lastTab = HelpTab.Roles;
     private static string _searchKeyword = "";
 
-    /// <summary>帮助菜单是否已打开（Unity 判断：窗口销毁后视为未打开）</summary>
+    /// <summary>帮助菜单是否已打开（窗口销毁后视为未打开）</summary>
     public static bool OpenedAnyHelpScreen => _lastScreen;
 
     /// <summary>打开帮助</summary>
@@ -52,25 +55,45 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.TryOpenHelpScreen]", ex);
+            LightLogger.LogError("HelpScreen.TryOpenHelpScreen", ex);
         }
     }
 
-    /// <summary>
-    /// 打开帮助并直接定位到“我的职业”页（F1 快捷查看自己职业）。
-    /// </summary>
+    /// <summary>打开帮助并定位到“我的职业”页（F1）；未分配职业时不打开</summary>
     public static void TryOpenMyInfo()
     {
         try
         {
-            if (LightGameManager.Instance?.LocalPlayer?.HasRole != true) return; // 未分配角色时不打开
+            if (LightGameManager.Instance?.LocalPlayer?.HasRole != true) return;
             _lastTab = HelpTab.MyInfo;
             _lastScreen = OpenHelpScreen();
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.TryOpenMyInfo]", ex);
+            LightLogger.LogError("HelpScreen.TryOpenMyInfo", ex);
         }
+    }
+
+    /// <summary>
+    /// 关闭最上层窗口：有职业详情二级窗口时优先关它，返回 true；否则返回 false（由调用方关整个 H 菜单）。
+    /// </summary>
+    public static bool TryCloseTopWindow()
+    {
+        try
+        {
+            if (_detailWindow)
+            {
+                UiModalGuard.Pop(_detailWindow!.transform.parent);
+                _detailWindow.CloseScreen();
+                _detailWindow = null;
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("HelpScreen.TryCloseTopWindow", ex);
+        }
+        return false;
     }
 
     /// <summary>关闭帮助</summary>
@@ -78,6 +101,20 @@ public static class HelpScreen
     {
         try
         {
+            // 二级窗口一并关闭，避免残留
+            if (_detailWindow)
+            {
+                UiModalGuard.Pop(_detailWindow!.transform.parent);
+                _detailWindow.CloseScreen();
+            }
+            _detailWindow = null;
+
+            // 注销模态遮罩（还原被临时禁用的原版控件）
+            if (_windowRoot != null)
+            {
+                UiModalGuard.Pop(_windowRoot.transform);
+                _windowRoot = null;
+            }
             if (_lastScreen)
             {
                 _lastScreen!.CloseScreen();
@@ -86,46 +123,56 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.TryCloseHelpScreen]", ex);
+            LightLogger.LogError("HelpScreen.TryCloseHelpScreen", ex);
         }
     }
 
-    /// <summary>当前有效页签（MyInfo 仅游戏中已分配角色时显示）</summary>
+    // =====================================================================
+    // 窗口与页签分发
+    // =====================================================================
+
+    /// <summary>当前有效页签（MyInfo 仅游戏中已分配职业时显示）</summary>
     private static HelpTab GetValidTabs()
     {
         try
         {
             var valid = HelpTab.Search | HelpTab.Roles | HelpTab.Overview | HelpTab.Options
-                | HelpTab.Slides | HelpTab.Achievements | HelpTab.Stamps;
+                | HelpTab.Achievements | HelpTab.Stamps;
             if (LightGameManager.Instance?.LocalPlayer?.HasRole == true)
                 valid |= HelpTab.MyInfo;
             return valid;
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.GetValidTabs]", ex); return default;
+            LightLogger.LogError("HelpScreen.GetValidTabs", ex); return default;
         }
+    }
+
+    /// <summary>帮助窗口父级：HUD → 主菜单 → 相机</summary>
+    private static Transform? FindParent()
+    {
+        if (HudManager.Instance != null)
+            return HudManager.Instance.transform;
+        var mainMenu = GameObject.FindObjectOfType<MainMenuManager>();
+        if (mainMenu != null)
+            return mainMenu.transform;
+        return Camera.main != null ? Camera.main.transform : null;
     }
 
     private static MetaScreen OpenHelpScreen()
     {
         try
         {
-            Transform? parent;
-            if (HudManager.Instance != null)
-                // 挂 HUD 根节点（UI 层由 UI 相机最后渲染），确保窗口盖住场景内所有 UI
-                parent = HudManager.Instance.transform;
-            else if (GameObject.FindObjectOfType<MainMenuManager>() != null)
-                parent = GameObject.FindObjectOfType<MainMenuManager>().transform;
-            else
-                parent = Camera.main != null ? Camera.main.transform : null;
-
-            var screen = MetaScreen.GenerateWindow(HelpSize, parent, new Vector3(0, 0, -50f),
+            var screen = MetaScreen.GenerateWindow(HelpSize, FindParent(), new Vector3(0, 0, -50f),
                 withBlackScreen: true, closeOnClickOutside: false,
                 background: BackgroundSetting.Modern, withCloseButton: true);
 
+            // 登记模态遮罩：H 菜单打开期间禁用不属于本窗口的原版控件，避免误触背景按钮
+            _windowRoot = screen.transform.parent.gameObject;
+            UiModalGuard.Push(_windowRoot.transform);
+
             var validTabs = GetValidTabs();
-            // 上次标签已无效（MyInfo 仅游戏中已分配角色时有效）时回退到默认标签
+            // MyInfo 仅在已分配职业时有效，否则回退默认页
             if (_lastTab == HelpTab.MyInfo && LightGameManager.Instance?.LocalPlayer?.HasRole != true)
                 _lastTab = HelpTab.Roles;
 
@@ -134,7 +181,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.OpenHelpScreen]", ex); return default;
+            LightLogger.LogError("HelpScreen.OpenHelpScreen", ex); return default;
         }
     }
 
@@ -143,29 +190,31 @@ public static class HelpScreen
         try
         {
             _lastTab = tab;
-            screen.SetWidget(BuildTabWidget(screen, validTabs, tab), out _);
+            // 用居中锚点：根节点位置与内容高度无关，避免反复切页签时整栏上下浮动
+            screen.SetWidget(BuildTabWidget(screen, validTabs, tab), new Vector2(0.5f, 0.5f), out _);
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowScreen]", ex);
+            LightLogger.LogError("HelpScreen.ShowScreen", ex);
         }
     }
 
-    // =====================================================================
-    // 标签栏 + 分发
-    // =====================================================================
+    /// <summary>页签显示顺序</summary>
+    private static readonly HelpTab[] TabOrder =
+    {
+        HelpTab.Search, HelpTab.MyInfo, HelpTab.Roles, HelpTab.Overview, HelpTab.Options,
+        HelpTab.Achievements, HelpTab.Stamps,
+    };
 
-    /// <summary>标签按钮属性（0.82×0.21，字号 1.6）</summary>
+    /// <summary>页签按钮属性</summary>
     private static TextAttribute TabButtonAttr => new(
         TextAlignment.Center, LIDGUI.Instance.GetFont(FontAsset.Gothic), FontStyle.Bold,
         new FontSize(1.6f, false), new Size(0.82f, 0.21f), Color.White, false);
 
-    /// <summary>显示顺序：Search → MyInfo → Roles → Overview → Options → Slides → Achievements → Stamps</summary>
-    private static readonly HelpTab[] TabOrder =
-    {
-        HelpTab.Search, HelpTab.MyInfo, HelpTab.Roles, HelpTab.Overview, HelpTab.Options,
-        HelpTab.Slides, HelpTab.Achievements, HelpTab.Stamps,
-    };
+    /// <summary>职业按钮属性</summary>
+    private static TextAttribute RoleButtonAttr => new(
+        TextAlignment.Center, LIDGUI.Instance.GetFont(FontAsset.GothicMasked), FontStyle.Bold,
+        new FontSize(1.8f, false), new Size(1.2f, 0.29f), Color.White, false);
 
     private static string GetTabName(HelpTab tab) => tab switch
     {
@@ -174,7 +223,6 @@ public static class HelpScreen
         HelpTab.Roles => Language.Translate("help.tabs.roles", "职业"),
         HelpTab.Overview => Language.Translate("help.tabs.overview", "概览"),
         HelpTab.Options => Language.Translate("help.tabs.options", "设置"),
-        HelpTab.Slides => Language.Translate("help.tabs.slides", "幻灯片"),
         HelpTab.Achievements => Language.Translate("help.tabs.achievements", "成就"),
         HelpTab.Stamps => Language.Translate("help.tabs.stamps", "印章"),
         _ => "?",
@@ -185,7 +233,6 @@ public static class HelpScreen
         try
         {
             var gui = LIDGUI.Instance;
-            // 布局改为“左侧页签栏 + 右侧内容”两栏式（区别于原水平的顶部标签栏）。
             return gui.HorizontalHolder(GUIAlignment.Center,
                 BuildTabsWidget(screen, validTabs, tab),
                 gui.HorizontalMargin(0.15f),
@@ -193,11 +240,11 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildTabWidget]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.BuildTabWidget", ex); return BuildErrorWidget();
         }
     }
 
-    /// <summary>左侧页签栏：当前白、其他灰，按钮纵向堆叠排列</summary>
+    /// <summary>左侧页签栏：当前白、其他灰，纵向堆叠</summary>
     private static GUIWidget BuildTabsWidget(MetaScreen screen, HelpTab validTabs, HelpTab current)
     {
         try
@@ -211,12 +258,11 @@ public static class HelpScreen
                 buttons.Add(gui.RawButton(GUIAlignment.Center, TabButtonAttr, GetTabName(tab),
                     _ => ShowScreen(screen, validTabs, tab), color: color, selectedColor: color));
             }
-            // 纵向堆叠成左侧栏
             return gui.VerticalHolder(GUIAlignment.Center, buttons.ToArray());
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildTabsWidget]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.BuildTabsWidget", ex); return BuildErrorWidget();
         }
     }
 
@@ -227,26 +273,25 @@ public static class HelpScreen
         HelpTab.Roles => ShowAssignableScreen(),
         HelpTab.Overview => ShowPreviewScreen(),
         HelpTab.Options => ShowOptionsScreen(),
-        HelpTab.Slides => ShowPlaceholderScreen("help.tabs.slides", "幻灯片"),
         HelpTab.Achievements => ShowPlaceholderScreen("help.tabs.achievements", "成就"),
         HelpTab.Stamps => ShowPlaceholderScreen("help.tabs.stamps", "印章"),
         _ => LIDGUI.Instance.EmptyWidget,
     };
 
-    /// <summary>占位页：功能尚未实现时的空滚动页</summary>
+    /// <summary>占位页：功能尚未实装时的空滚动页</summary>
     private static GUIWidget ShowPlaceholderScreen(string key, string name)
     {
         try
         {
             var gui = LIDGUI.Instance;
-            var text = gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
+            var text = gui.RawText(GUIAlignment.Center, WrappingAttr(AttributeAsset.DocumentStandard),
                 Language.Translate(key + ".empty", name + "内容尚未实装"));
-            return gui.ScrollView(GUIAlignment.Center, new Size(7.4f, 4.1f), null,
+            return gui.ScrollView(GUIAlignment.Center, new Size(6.1f, 4.1f), null,
                 gui.VerticalHolder(GUIAlignment.Center, text), out _);
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowPlaceholderScreen]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.ShowPlaceholderScreen", ex); return BuildErrorWidget();
         }
     }
 
@@ -254,24 +299,18 @@ public static class HelpScreen
     // Roles 页
     // =====================================================================
 
-    /// <summary>职业按钮属性（字号 1.8）</summary>
-    private static TextAttribute RoleButtonAttr => new(
-        TextAlignment.Center, LIDGUI.Instance.GetFont(FontAsset.GothicMasked), FontStyle.Bold,
-        new FontSize(1.8f, false), new Size(1.2f, 0.29f), Color.White, false);
-
     private static GUIWidget ShowAssignableScreen()
     {
         try
         {
             var gui = LIDGUI.Instance;
-            var listed = new List<RoleTemplate>();
+            // 点击按钮时该列表已完整，索引对应点击时的列表位置
+            var allRoles = new List<RoleTemplate>();
             var inner = new List<GUIWidget?>();
 
             void AddCategory(RoleCategory category, string title, Color titleColor)
             {
-                var roles = new List<RoleTemplate>();
-                foreach (var role in SortedRoles())
-                    if (role.RoleCategory == category) roles.Add(role);
+                var roles = SortedRoles().Where(r => r.RoleCategory == category).ToList();
                 if (roles.Count == 0) return;
 
                 if (inner.Count > 0) inner.Add(gui.VerticalMargin(0.2f));
@@ -282,11 +321,11 @@ public static class HelpScreen
                 var buttons = new List<GUIWidget?>();
                 foreach (var role in roles)
                 {
-                    listed.Add(role);
-                    int index = listed.Count - 1;
+                    allRoles.Add(role);
+                    int index = allRoles.Count - 1;
                     var name = gui.ColorTextComponent(role.Color, new RawTextComponent(role.Name)).GetString();
                     buttons.Add(gui.RawButton(GUIAlignment.Center, RoleButtonAttr, name,
-                        _ => OpenAssignableHelp(listed, index)));
+                        _ => OpenAssignableHelp(allRoles, index)));
                 }
                 inner.Add(gui.Arrange(GUIAlignment.Center, buttons, 4));
             }
@@ -295,12 +334,12 @@ public static class HelpScreen
             AddCategory(RoleCategory.Neutral, Language.Translate("role.category.neutral", "中立"), new Color(1f, 0.7f, 0f));
             AddCategory(RoleCategory.Crewmate, Language.Translate("role.category.crewmate", "船员"), Color.CrewmateColor);
 
-            return gui.ScrollView(GUIAlignment.Center, new Size(7.4f, 4.1f), null,
+            return gui.ScrollView(GUIAlignment.Center, new Size(6.1f, 4.1f), null,
                 gui.VerticalHolder(GUIAlignment.Center, inner), out _);
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowAssignableScreen]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.ShowAssignableScreen", ex); return BuildErrorWidget();
         }
     }
 
@@ -324,16 +363,16 @@ public static class HelpScreen
             }
             else
             {
-                inner.Add(gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                inner.Add(gui.RawText(GUIAlignment.Center, WrappingAttr(AttributeAsset.DocumentStandard),
                     Language.Translate("help.myInfo.none", "当前未分配职业")));
             }
 
-            return gui.ScrollView(GUIAlignment.Center, new Size(7.4f, 3.4f), null,
+            return gui.ScrollView(GUIAlignment.Center, new Size(6.1f, 3.4f), null,
                 gui.VerticalHolder(GUIAlignment.Center, inner), out _);
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowMyRolesScreen]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.ShowMyRolesScreen", ex); return BuildErrorWidget();
         }
     }
 
@@ -346,16 +385,21 @@ public static class HelpScreen
         try
         {
             var gui = LIDGUI.Instance;
-            var scrollView = new GUIScrollView(GUIAlignment.Center, new Size(7.4f, 3.2f),
+            var scrollView = new GUIScrollView(GUIAlignment.Center, new Size(6.1f, 3.2f),
                 () => BuildSearchResultWidget(gui, _searchKeyword));
 
             void ShowResult(string keyword)
             {
                 _searchKeyword = keyword;
-                scrollView.Artifact?.SetWidget(BuildSearchResultWidget(gui, keyword), out _);
+                var artifact = scrollView.Artifact;
+                if (artifact != null)
+                    artifact.SetWidget(BuildSearchResultWidget(gui, keyword), out _);
+                else if (_lastScreen)
+                    // 结果区尚未实例化时整页重建
+                    ShowScreen(_lastScreen!, GetValidTabs(), HelpTab.Search);
             }
 
-            var field = new TextFieldWidget(GUIAlignment.Center, new Vector2(5f, 0.38f),
+            var field = new TextFieldWidget(GUIAlignment.Center, new Vector2(4.5f, 0.38f),
                 Language.Translate("help.search.inputHint", "输入关键词"),
                 keyword => ShowResult(keyword));
 
@@ -370,11 +414,11 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowSearchScreen]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.ShowSearchScreen", ex); return BuildErrorWidget();
         }
     }
 
-    /// <summary>搜索结果：匹配 Name 或 Description</summary>
+    /// <summary>搜索结果：匹配职业名或描述全文（忽略大小写）</summary>
     private static GUIWidget BuildSearchResultWidget(LIDGUI gui, string keyword)
     {
         try
@@ -384,22 +428,19 @@ public static class HelpScreen
 
             if (keyword.Length == 0)
             {
-                inner.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                inner.Add(gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.DocumentStandard),
                     Language.Translate("help.search.hint", "输入关键词搜索职业")));
                 return gui.VerticalHolder(GUIAlignment.Left, inner);
             }
 
-            var matched = new List<RoleTemplate>();
-            foreach (var role in SortedRoles())
-            {
-                if (role.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-                    role.DescribeText.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                    matched.Add(role);
-            }
+            var matched = SortedRoles()
+                .Where(r => r.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                         || r.GetDocumentText().Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             if (matched.Count == 0)
             {
-                inner.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                inner.Add(gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.DocumentStandard),
                     Language.Translate("help.search.noResult", "未找到相关职业")));
             }
             else
@@ -418,12 +459,12 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildSearchResultWidget]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.BuildSearchResultWidget", ex); return BuildErrorWidget();
         }
     }
 
     // =====================================================================
-    // Overview 页（简化：无模拟人数切换）
+    // Overview 页
     // =====================================================================
 
     private static GUIWidget ShowPreviewScreen()
@@ -441,16 +482,17 @@ public static class HelpScreen
                 playerCount = players.Count;
             }
 
-            // 单列：分类标题 + 职业分配信息
             GUIWidget BuildColumn(RoleCategory category, string title)
             {
-                var column = new List<GUIWidget?>();
-                column.Add(gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentTitle), title));
-                column.Add(gui.VerticalMargin(0.15f));
+                var column = new List<GUIWidget?>
+                {
+                    gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentTitle), title),
+                    gui.VerticalMargin(0.15f),
+                };
                 foreach (var role in SortedRoles())
                 {
                     if (role.RoleCategory != category) continue;
-                    column.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                    column.Add(gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.DocumentStandard),
                         GetAllocationLine(role)));
                     column.Add(gui.VerticalMargin(0.08f));
                 }
@@ -469,16 +511,16 @@ public static class HelpScreen
                 gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentTitle),
                     Language.Translate("help.overview.header", "分配计划")),
                 gui.VerticalMargin(0.1f),
-                gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                gui.RawText(GUIAlignment.Center, WrappingAttr(AttributeAsset.DocumentStandard),
                     Language.Translate("help.overview.players", "当前玩家数") + ": " + playerCount),
                 gui.VerticalMargin(0.1f),
                 columns);
 
-            return gui.ScrollView(GUIAlignment.Center, new Size(7.4f, 2.92f), null, header, out _);
+            return gui.ScrollView(GUIAlignment.Center, new Size(6.1f, 2.92f), null, header, out _);
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowPreviewScreen]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.ShowPreviewScreen", ex); return BuildErrorWidget();
         }
     }
 
@@ -502,7 +544,7 @@ public static class HelpScreen
                 {
                     void AddLine(string name, string value)
                     {
-                        inner.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                        inner.Add(gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.DocumentStandard),
                             $"{name}: {value}"));
                         inner.Add(gui.VerticalMargin(0.03f));
                     }
@@ -551,19 +593,19 @@ public static class HelpScreen
             }
             catch (Exception ex)
             {
-                LightLogger.LogError("[HelpScreen.ShowOptionsScreen.Options]", ex);
+                LightLogger.LogError("HelpScreen.ShowOptionsScreen.Options", ex);
             }
 
             if (inner.Count == 0)
-                inner.Add(gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
+                inner.Add(gui.RawText(GUIAlignment.Center, WrappingAttr(AttributeAsset.DocumentStandard),
                     Language.Translate("help.options.unavailable", "无法读取游戏设置")));
 
-            return gui.ScrollView(GUIAlignment.Center, new Size(7.4f, 3.6f), null,
+            return gui.ScrollView(GUIAlignment.Center, new Size(6.1f, 3.6f), null,
                 gui.VerticalHolder(GUIAlignment.Left, inner), out _);
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.ShowOptionsScreen]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.ShowOptionsScreen", ex); return BuildErrorWidget();
         }
     }
 
@@ -571,6 +613,7 @@ public static class HelpScreen
     // 职业详情子窗口
     // =====================================================================
 
+    /// <summary>打开职业详情：列表内左右循环切换</summary>
     private static void OpenAssignableHelp(List<RoleTemplate> roles, int index)
     {
         try
@@ -579,29 +622,27 @@ public static class HelpScreen
             if (index < 0 || index >= roles.Count) index = 0;
 
             int currentIndex = index;
-            MetaScreen? window = null;
-
-            Transform? GetParent()
-            {
-                if (HudManager.Instance != null)
-                    // 挂 HUD 根节点，与主帮助菜单同层级
-                    return HudManager.Instance.transform;
-                if (GameObject.FindObjectOfType<MainMenuManager>() != null)
-                    return GameObject.FindObjectOfType<MainMenuManager>().transform;
-                return Camera.main != null ? Camera.main.transform : null;
-            }
 
             void ReopenWindow()
             {
-                if (window) window!.CloseScreen();
+                if (_detailWindow)
+                {
+                    UiModalGuard.Pop(_detailWindow!.transform.parent);
+                    _detailWindow.CloseScreen();
+                    _detailWindow = null;
+                }
 
-                // 详情窗口后创建，排序相同的情况下自然渲染在帮助菜单之上
-                window = MetaScreen.GenerateWindow(new Vector2(7f, 4.5f), GetParent(), new Vector3(0, 0, -100f),
+                // 详情窗口后创建，同排序下自然渲染在帮助菜单之上
+                _detailWindow = MetaScreen.GenerateWindow(new Vector2(7f, 4.5f), FindParent(), new Vector3(0, 0, -100f),
                     withBlackScreen: true, closeOnClickOutside: true,
                     background: BackgroundSetting.Modern, sortingGroupOrder: 200);
-                window.SetWidget(BuildRoleDetailWidget(roles[currentIndex]), out _);
+                // 详情窗口也登记遮罩：其按钮同样要放行，否则会被 H 菜单的遮罩一并禁用
+                UiModalGuard.Push(_detailWindow.transform.parent);
+                // 居中锚点：切换职业（内容高度变化）时窗口内容不上下浮动
+                _detailWindow.SetWidget(BuildRoleDetailWidget(roles[currentIndex]), new Vector2(0.5f, 0.5f), out _);
 
-                MetaScreen.SetUpNavButton(window, increment =>
+                var win = _detailWindow;
+                MetaScreen.SetUpNavButton(win, increment =>
                 {
                     currentIndex = (roles.Count + currentIndex + (increment ? 1 : -1)) % roles.Count;
                     ReopenWindow();
@@ -612,7 +653,7 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.OpenAssignableHelp]", ex);
+            LightLogger.LogError("HelpScreen.OpenAssignableHelp", ex);
         }
     }
 
@@ -621,7 +662,6 @@ public static class HelpScreen
         try
         {
             var gui = LIDGUI.Instance;
-            var attr = gui.GetAttribute(AttributeAsset.OverlayContent);
 
             // 立绘区：框 + 画像重叠，无立绘时不显示
             GUIWidget? portrait = null;
@@ -641,39 +681,39 @@ public static class HelpScreen
             };
             if (!string.IsNullOrEmpty(role.IntroText))
             {
-                texts.Add(gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.OverlayContent),
+                texts.Add(gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.OverlayContent),
                     gui.ColorTextComponent(role.Color, new RawTextComponent(role.IntroText)).GetString()));
             }
             var textColumn = gui.VerticalHolder(GUIAlignment.Left, texts.ToArray());
 
-            // 头部行：左对齐，立绘与文字列垂直居中等高
             var headerWidgets = new List<GUIWidget?>();
             if (portrait != null) headerWidgets.Add(portrait);
             headerWidgets.Add(textColumn);
             var header = gui.HorizontalHolder(GUIAlignment.Left, headerWidgets.ToArray());
 
-            // 技能介绍（按职业的 DocumentType 渲染：Normal 走语言键，Html/MarkDown 走嵌入文档）
-            var skill = role.GetDocumentText();
-
             return gui.VerticalHolder(GUIAlignment.Left,
                 header,
                 gui.VerticalMargin(0.1f),
-                gui.RawText(GUIAlignment.Left, gui.GetAttribute(AttributeAsset.DocumentStandard), skill),
+                gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.DocumentStandard), role.GetDocumentText()),
                 gui.VerticalMargin(0.1f),
-                gui.RawText(GUIAlignment.Left, attr,
+                gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.OverlayContent),
                     Language.Translate("help.role.category", "阵营") + ": " + GetCategoryName(role.RoleCategory)),
                 gui.VerticalMargin(0.1f),
-                gui.RawText(GUIAlignment.Left, attr, GetAllocationLine(role)));
+                gui.RawText(GUIAlignment.Left, WrappingAttr(AttributeAsset.OverlayContent), GetAllocationLine(role)));
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.BuildRoleDetailWidget]", ex); return BuildErrorWidget();
+            LightLogger.LogError("HelpScreen.BuildRoleDetailWidget", ex); return BuildErrorWidget();
         }
     }
 
     // =====================================================================
     // 公共小工具
     // =====================================================================
+
+    /// <summary>构造可换行的说明文本属性（长文本按容器宽度自动折行）</summary>
+    private static TextAttribute WrappingAttr(AttributeAsset asset)
+        => new(LIDGUI.Instance.GetAttribute(asset)) { Wrapping = true };
 
     private static string GetCategoryName(RoleCategory category) => category switch
     {
@@ -703,21 +743,29 @@ public static class HelpScreen
         }
         catch (Exception ex)
         {
-            LightLogger.LogError("[HelpScreen.GetAllocationLine]", ex);
+            LightLogger.LogError("HelpScreen.GetAllocationLine", ex);
             return Language.Translate("help.page.error", "该页面加载失败");
         }
     }
 
-    /// <summary>按注册序号排序的职业列表（字典遍历顺序未定义，保证各页显示稳定）</summary>
+    /// <summary>按注册序号（再按内部名）排序的职业列表，保证各页显示稳定</summary>
     private static List<RoleTemplate> SortedRoles() =>
         RoleRegistry.AllRoles.OrderBy(r => r.Id).ThenBy(r => r.CodeName).ToList();
 
     /// <summary>页面构建失败时的降级提示 widget</summary>
     private static GUIWidget BuildErrorWidget()
     {
-        var gui = LIDGUI.Instance;
-        return gui.RawText(GUIAlignment.Center, gui.GetAttribute(AttributeAsset.DocumentStandard),
-            Language.Translate("help.page.error", "该页面加载失败"));
+        try
+        {
+            var gui = LIDGUI.Instance;
+            return gui.RawText(GUIAlignment.Center, WrappingAttr(AttributeAsset.DocumentStandard),
+                Language.Translate("help.page.error", "该页面加载失败"));
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("HelpScreen.BuildErrorWidget", ex);
+            return LIDGUI.Instance.EmptyWidget;
+        }
     }
 
     private static string GetBoolText(bool value) =>

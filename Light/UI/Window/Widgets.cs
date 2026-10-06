@@ -224,6 +224,8 @@ public class NoSGUIText : AbstractGUIWidget
             text.fontSizeMax = attr.FontSize.FontSizeMax;
             text.enableAutoSizing = attr.FontSize.AllowAutoSizing;
             text.enableWordWrapping = attr.Wrapping;
+            // 换行时不裁剪字形，可视裁剪交给外层滚动区
+            if (attr.Wrapping) text.overflowMode = TextOverflowModes.Overflow;
             text.rectTransform.sizeDelta = new Vector2(Mathf.Min(width, attr.Size.Width), attr.Size.Height);
             text.rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
             text.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
@@ -233,7 +235,7 @@ public class NoSGUIText : AbstractGUIWidget
             {
                 text.font = attr.Font.FontAsset;
                 if (attr.Font.FontMaterial != null)
-                    text.fontMaterial = attr.Font.FontMaterial;
+                    text.fontSharedMaterial = attr.Font.FontMaterial;   // 共享材质：与 GUIScrollView.ApplyMask 的图集比对保持一致
             }
         }
         catch (Exception ex)
@@ -269,7 +271,11 @@ public class NoSGUIText : AbstractGUIWidget
             {
                 if (text.enableWordWrapping)
                 {
-                    float w = Mathf.Min(text.rectTransform.sizeDelta.x, text.textBounds.size.x);
+                    // 换行：宽度先定，高度给足后再测实际占用，避免截断或溢出
+                    float availableWidth = Mathf.Min(size.Width, Attr.Size.Width);
+                    text.rectTransform.sizeDelta = new Vector2(availableWidth, Attr.Size.Height);
+                    text.ForceMeshUpdate();
+                    float w = Mathf.Min(text.textBounds.size.x, availableWidth);
                     float h = text.textBounds.size.y;
                     text.rectTransform.sizeDelta = new Vector2(w, h);
                 }
