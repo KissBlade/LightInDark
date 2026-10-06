@@ -24,6 +24,20 @@ namespace LightInDark.Roles
         /// <summary>阵营。</summary>
         public virtual RoleCategory RoleCategory => RoleCategory.Crewmate;
 
+        public virtual NeutralType NeutralType => NeutralType.Benign;
+
+        /// <summary>队伍：覆写成同一个字符串即视为同队（名字互相可见、不能互相击杀）。</summary>
+        public virtual string TeamCode => null;
+
+        /// <summary>能否钻通风管：覆写 true 即可，不需要改补丁。</summary>
+        public virtual bool CanUseVents => false;
+
+        /// <summary>能否击杀：覆写 true 后在 OnActivated 里调 AbilityButtonFactory.CreateKill(this)。</summary>
+        public virtual bool CanKill => false;
+
+        /// <summary>击杀冷却（秒）。</summary>
+        public virtual float KillCooldown => 20f;
+
         /// <summary>注册序号（RPC 用）。</summary>
         public int Id { get; internal set; }
 
