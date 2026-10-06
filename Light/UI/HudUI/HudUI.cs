@@ -6,8 +6,8 @@ using LightInDark.UI.Window;
 using Light.UI.Window;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Rendering;          // SortingGroup
 using UnityEngine.Events;
-using UnityEngine.Rendering;
 using UnityEngine.UI;
 using LightInDark.Core;
 using Button = UnityEngine.UI.Button;
@@ -1007,7 +1007,8 @@ public class HudUIWindow
     ///    这里把它内置：开窗时 Push + 挂每帧 Sweep 驱动器，关窗时 Pop 还原。
     /// </param>
     public static HudUIWindow Create(string title = "", Vector2? size = null, Transform? parent = null,
-        bool blockInputBehind = true)
+        bool blockInputBehind = true, int sortingGroupOrder = 100, float z = -50f,
+        bool topSortingLayer = false)
     {
         try
         {
@@ -1015,12 +1016,72 @@ public class HudUIWindow
             if (parent == null) throw new InvalidOperationException("HudManager 未就绪");
 
             var windowSize = size ?? new Vector2(5f, 3f);
-            var screen = MetaScreen.GenerateWindow(windowSize, parent, new Vector3(0f, 0f, -50f),
+
+            // ⚠️ 2026-10-06 把 sortingGroupOrder / z 开放出来（原来写死 100 / -50）：
+            //    用户反馈"弹窗会在聊天框后面" —— **聊天框属于 HUD，它的 sortingOrder 比 100 高**，
+            //    于是我们的窗口被压在它下面：看得见、点不到；再叠加 UiModalGuard 把下层锁住 → 卡死。
+            //    ⚠️ **窗口盖不盖得住只取决于 sortingGroupOrder**，z 只在同一 sortingOrder 内部比较。
+            var screen = MetaScreen.GenerateWindow(windowSize, parent, new Vector3(0f, 0f, z),
                 withBlackScreen: true, closeOnClickOutside: false,
-                background: BackgroundSetting.Modern, withCloseButton: true);
+                background: BackgroundSetting.Modern, withCloseButton: true,
+                sortingGroupOrder: sortingGroupOrder);
 
             var window = new HudUIWindow(screen, windowSize);
             if (blockInputBehind) window.EnableInputBlock();
+
+            // ⚠️⚠️ 2026-10-06（用户第二次反馈"弹窗还是在聊天框后面"，order=30000 也没用）：
+            //
+            //   **问题不是 order，是 SortingLayer。**
+            //   Unity 的排序是 **先比 sortingLayer，再比 sortingOrder** ——
+            //   层不对的话 order 给到 32767 也没用。
+            //
+            //   而 `MetaScreen.GenerateScreen` 里**只设了 `sortGroup.sortingOrder`，
+            //   从没设过 `sortingLayerID`** → 窗口一直留在默认层上，
+            //   而 HUD 的聊天框在更靠后的排序层里 → 我们永远被压在下面。
+            //
+            //   修法：把窗口的 SortingGroup 抬到 **`SortingLayer.layers` 里最后那个层**
+            //   （那个数组按值升序，最后一个就是最靠前的）✓
+            if (topSortingLayer)
+            {
+                try
+                {
+                    // ⚠️⚠️⚠️ **绝对不要用 `SortingLayer.layers`**（2026-10-06 日志实证）：
+                    //   它在 IL2CPP 里**被裁剪掉了**，一调就抛 `Method unstripping failed` ——
+                    //   于是整个 `if` 块**静默失效**，order 没设、层没抬、渲染器循环也没跑。
+                    //   我前面三轮"调了没用"就是这个原因：**代码根本没执行**。
+                    //
+                    //   改用不需要枚举层的办法：**给窗口子树里每个渲染器直接写排序值**。
+                    //   只要值足够大，在哪个层都能压过去（不依赖"找到最高层"）。
+                    int fixedRenderers = 0, fixedGroups = 0;
+                    var meta = screen.transform.parent;      // MetaWindow
+
+                    if (meta != null)
+                    {
+                        // ① 嵌套 SortingGroup（HudUIButton 自己挂了一个，会覆盖外层）
+                        foreach (var g in meta.GetComponentsInChildren<SortingGroup>(true))
+                        {
+                            if (g == null) continue;
+                            g.sortingOrder = sortingGroupOrder;
+                            fixedGroups++;
+                        }
+
+                        // ② 每个渲染器 —— 有 SortingGroup 的会被组统一管，没组的直接写
+                        foreach (var r in meta.GetComponentsInChildren<Renderer>(true))
+                        {
+                            if (r == null) continue;
+                            r.sortingOrder = sortingGroupOrder;
+                            fixedRenderers++;
+                        }
+                    }
+
+                    LightLogger.Log($"[HudUIWindow] 排序已设：order={sortingGroupOrder}" +
+                                    $"，改了 {fixedGroups} 个 SortingGroup + {fixedRenderers} 个渲染器");
+                }
+                catch (Exception ex)
+                {
+                    LightLogger.LogWarning($"[HudUIWindow] 设排序失败：{ex.Message}");
+                }
+            }
             return window;
         }
         catch (Exception ex)
@@ -1076,6 +1137,58 @@ public class HudUIWindow
         catch (Exception ex)
         {
             LightLogger.LogError("[HudUIWindow.EnableInputBlock]", ex);
+        }
+    }
+
+    /// <summary>
+    /// **把窗口子树里所有渲染器的 sortingOrder 抬到指定值。**
+    ///
+    /// ⚠️⚠️⚠️ **必须等窗口内容全部建完之后再调**（2026-10-06 日志实证，这是"窗口里啥也没有"的真根因）。
+    ///
+    ///  原来这段逻辑写在 <c>Create</c> 里 —— 而 `Create` 返回时**内容还没建**
+    ///  （调用方才开始 `AddText` / `HudUIButton.Create`）。
+    ///  于是日志里是这样：
+    /// <code>
+    ///   [1] Inner        sortingLayer='Default'/30000   ← 窗口自己的，设上了
+    ///   [3] BlackScreen  sortingLayer='Default'/30000   ← 黑幕也设上了
+    ///   [4] Text '预览…'  sortingLayer='Default'/0       ← ★ 后建的内容全是 0
+    ///   [8] HudUIButton   sortingLayer='Default'/0       ← ★ 被黑幕(30000)盖住
+    /// </code>
+    ///  **黑幕 30000、内容 0 → 整个窗口看起来就是一块空的暗板。**
+    ///
+    ///  所以拆成公开方法，由调用方在**建完内容之后**调一次。
+    /// </summary>
+    public void AscendSorting(int order = 30000)
+    {
+        try
+        {
+            var meta = Screen != null ? Screen.transform.parent : null;   // MetaWindow
+            if (meta == null) { LightLogger.LogWarning("[HudUIWindow] 找不到 MetaWindow，排序没设"); return; }
+
+            int groups = 0, renderers = 0;
+
+            // ① 嵌套 SortingGroup —— HudUIButton 自己挂了一个，会覆盖外层组的排序
+            foreach (var g in meta.GetComponentsInChildren<SortingGroup>(true))
+            {
+                if (g == null) continue;
+                g.sortingOrder = order;
+                groups++;
+            }
+
+            // ② 每个渲染器（TMP 的文字渲染器、SpriteRenderer…）
+            foreach (var r in meta.GetComponentsInChildren<Renderer>(true))
+            {
+                if (r == null) continue;
+                r.sortingOrder = order;
+                renderers++;
+            }
+
+            LightLogger.Log($"[HudUIWindow] 排序已抬：order={order}，" +
+                            $"{groups} 个 SortingGroup + {renderers} 个渲染器");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[HudUIWindow.AscendSorting] {ex.Message}");
         }
     }
 
@@ -1259,240 +1372,5 @@ public class HudUIWindow
                 try { UiModalGuard.ForceSweep(); } catch { }
             }
         }
-    }
-}
-
-// =====================================================================
-// HudUIInputField — 通用输入框（2026-10-06 新增）
-//
-// 用户："保存需要俩输入框。这俩输入框怎么说呢，HudUI 那个不好使，
-//       你修一下 HudUI 的拿来用吧。"
-//
-// ⚠️ 之前是在 PresetWindow 里临时克隆原版 EnterCodeField，实测四个坑全踩：
-//    ① **占位符"输入代码"一直挂着** —— 原版 TextBoxTMP 自带 placeholderText 子物体；
-//    ② **整个框看不见** —— 原版那个 Background 在克隆体上是 null / 尺寸为 0；
-//    ③ **什么都输不进去** —— 原版只允许房间码字符（allowAllCharacters = false）；
-//    ④ **回车会触发"加入房间"** —— 克隆体自带 OnEnter 回调（§4.5 同一类坑）。
-//    现在统一在这里修好，外面直接用。
-// =====================================================================
-
-/// <summary>
-/// HudUI 的通用输入框（包装原版 <see cref="TextBoxTMP"/>）。
-/// 用 <see cref="Create"/> 建，别自己 new。
-/// </summary>
-public class HudUIInputField
-{
-    public GameObject GameObject { get; private set; }
-    public TextBoxTMP? Box { get; private set; }
-
-    private TextMeshPro? _placeholder;
-    private SpriteRenderer? _bg;
-
-    private HudUIInputField(GameObject go, TextBoxTMP? box)
-    {
-        GameObject = go;
-        Box = box;
-    }
-
-    /// <summary>当前文本。</summary>
-    public string Text => Box != null ? (Box.text ?? "") : "";
-
-    public void SetText(string text)
-    {
-        try
-        {
-            if (Box == null) return;
-            Box.SetText(text ?? "");
-            RefreshPlaceholder();
-        }
-        catch (Exception ex) { LightLogger.LogWarning($"[HudUIInputField.SetText] {ex.Message}"); }
-    }
-
-    public void SetPosition(Vector3 localPos)
-    {
-        try { if (GameObject != null) GameObject.transform.localPosition = localPos; } catch { }
-    }
-
-    public void SetActive(bool on)
-    {
-        try { if (GameObject != null) GameObject.SetActive(on); } catch { }
-    }
-
-    /// <summary>主动聚焦（弹出软键盘 —— PC 上没用，但手柄/触屏有用）。</summary>
-    public void Focus()
-    {
-        try { Box?.GiveFocus(); } catch { }
-    }
-
-    /// <summary>按当前文本决定占位符显不显示。</summary>
-    private void RefreshPlaceholder()
-    {
-        try
-        {
-            if (_placeholder == null) return;
-            bool empty = string.IsNullOrEmpty(Text);
-            _placeholder.gameObject.SetActive(empty);
-        }
-        catch { }
-    }
-
-    /// <summary>
-    /// 建一个输入框。
-    /// </summary>
-    /// <param name="parent">挂哪。</param>
-    /// <param name="size">外框尺寸（宽 × 高，世界单位）。</param>
-    /// <param name="placeholder">空的时候显示的灰字提示。</param>
-    /// <param name="characterLimit">最大字符数（&lt;=0 = 不限）。</param>
-    public static HudUIInputField Create(Transform parent, Vector2 size,
-        string placeholder = "", int characterLimit = 24)
-    {
-        var go = new GameObject("HudUIInput");
-        go.layer = LayerExpansion.GetUILayer();
-        go.transform.SetParent(parent, false);
-        go.transform.localPosition = Vector3.zero;
-        go.transform.localScale = Vector3.one;
-
-        var field = new HudUIInputField(go, null);
-
-        try
-        {
-            // ① 底框：**自己画**（原版那个 Background 在克隆体上不可靠，见类注释 ②）
-            var bg = go.AddComponent<SpriteRenderer>();
-            bg.sprite = HudUIAssets.ButtonNormal;
-            bg.drawMode = SpriteDrawMode.Sliced;
-            bg.size = size;
-            field._bg = bg;
-
-            // ② 克隆一个原版 TextBoxTMP 当输入核心
-            var tpl = FindTextBoxTemplate();
-            if (tpl == null)
-            {
-                LightLogger.LogWarning("[HudUIInputField] 找不到可克隆的 TextBoxTMP，输入框不可用");
-                return field;
-            }
-
-            var box = Object.Instantiate(tpl, go.transform);
-            box.gameObject.name = "InputCore";
-            box.gameObject.SetActive(true);
-            box.transform.localPosition = new Vector3(0f, 0f, -0.1f);
-            box.transform.localScale = Vector3.one;
-            field.Box = box;
-
-            // ③ 输入规则：**必须放开**，否则只能输房间码那几个字符（坑 ③）
-            box.allowAllCharacters = true;
-            box.AllowSymbols = true;
-            box.AllowPaste = true;
-            box.ForceUppercase = false;
-            box.ClearOnFocus = false;
-            box.ClearOnlyPlaceholderOnFocus = true;
-            box.characterLimit = characterLimit;
-
-            // ④ 清掉原版自带的行为与占位符（坑 ① ④）
-            box.OnEnter = new UnityEngine.UI.Button.ButtonClickedEvent();   // 否则回车=加入房间
-            box.OnChange ??= new UnityEngine.UI.Button.ButtonClickedEvent();
-            box.OnChange.AddListener((UnityAction)(() => field.RefreshPlaceholder()));
-            ClearVanillaPlaceholder(box);
-
-            // ⑤ 尺寸/字体：原版那个是给 6 位房间码用的，小得很
-            if (box.Background != null)
-            {
-                box.Background.drawMode = SpriteDrawMode.Sliced;
-                box.Background.size = new Vector2(size.x - 0.12f, size.y - 0.12f);
-            }
-
-            if (box.outputText != null)
-            {
-                var tmp = box.outputText;
-                tmp.enableAutoSizing = false;          // §12.2：不关掉字号完全不生效
-                tmp.fontSize = 1.55f;
-                tmp.fontSizeMin = 1.55f;
-                tmp.fontSizeMax = 1.55f;
-                tmp.fontStyle = FontStyles.Bold;       // §12.1
-                tmp.alignment = TextAlignmentOptions.Left;
-                tmp.enableWordWrapping = false;
-                tmp.overflowMode = TextOverflowModes.Ellipsis;
-                tmp.rectTransform.sizeDelta = new Vector2(size.x - 0.30f, size.y - 0.16f);
-                tmp.rectTransform.localPosition = new Vector3(0f, 0f, -0.05f);
-            }
-
-            // ⑥ 我们自己的占位符（原版那个已经被清掉了）
-            if (!string.IsNullOrEmpty(placeholder))
-            {
-                var ph = HudUITextHelper.Create(go.transform);
-                if (ph != null)
-                {
-                    ph.text = placeholder;
-                    ph.enableAutoSizing = false;
-                    ph.fontSize = 1.45f;
-                    ph.fontSizeMin = 1.45f;
-                    ph.fontSizeMax = 1.45f;
-                    ph.fontStyle = FontStyles.Bold;
-                    ph.alignment = TextAlignmentOptions.Left;
-                    ph.color = new UnityEngine.Color(1f, 1f, 1f, 0.45f);   // 全限定：本文件 Color 会撞 LightInDark.Color
-                    ph.rectTransform.sizeDelta = new Vector2(size.x - 0.30f, size.y - 0.16f);
-                    ph.rectTransform.localPosition = new Vector3(-0.02f, 0f, -0.15f);
-                    field._placeholder = ph;
-                }
-            }
-
-            field.SetText("");
-            LightLogger.Log($"[HudUIInputField] 输入框已建（{size.x}×{size.y}，上限 {characterLimit} 字）");
-        }
-        catch (Exception ex)
-        {
-            LightLogger.LogError("[HudUIInputField.Create]", ex);
-        }
-
-        return field;
-    }
-
-    /// <summary>把原版那个"输入代码"占位符清掉（它是 TextBoxTMP 的子物体）。</summary>
-    private static void ClearVanillaPlaceholder(TextBoxTMP box)
-    {
-        try
-        {
-            var outTmp = box.outputText;
-            foreach (var t in box.GetComponentsInChildren<TextMeshPro>(true))
-            {
-                if (t == null) continue;
-                if (outTmp != null && t.Pointer == outTmp.Pointer) continue;   // 真输出文本，留着
-                t.text = "";
-                t.gameObject.SetActive(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            LightLogger.LogWarning($"[HudUIInputField.ClearVanillaPlaceholder] {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 找一个原版 TextBoxTMP 当模板。
-    /// ⚠️ 用 <c>FindObjectOfType</c> 而不是 <c>DestroyableSingleton</c> ——
-    ///    后者找不到实例时**会凭空造一个 MainMenuManager 出来**，Awake 里直接 NRE（踩过）。
-    /// </summary>
-    private static TextBoxTMP? FindTextBoxTemplate()
-    {
-        // ① 主界面那个"输房间码"的（entercodeField 是 PassiveButton，真输入框在它子物体上）
-        try
-        {
-            var menu = Object.FindObjectOfType<MainMenuManager>();
-            if (menu != null && menu.entercodeField != null)
-            {
-                var t = menu.entercodeField.GetComponentInChildren<TextBoxTMP>();
-                if (t != null) return t;
-            }
-        }
-        catch { }
-
-        // ② 兜底：已加载资源里任意一个
-        try
-        {
-            var all = Resources.FindObjectsOfTypeAll(Il2CppInterop.Runtime.Il2CppType.Of<TextBoxTMP>());
-            if (all != null && all.Length > 0) return all[0].TryCast<TextBoxTMP>();
-        }
-        catch { }
-
-        return null;
     }
 }

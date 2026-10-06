@@ -1,4 +1,5 @@
-﻿using AmongUs.Data;
+using AmongUs.Data;
+using LightInDark.Core;              // LightLogger
 using LightInDark.Language;
 using LightInDark.Utilities;
 using System;
@@ -63,9 +64,29 @@ public class UpdateCharCountPatch
 {
     public static void Postfix(FreeChatInputField __instance)
     {
-        int length = __instance.textArea.text.Length;
-        __instance.charCountText.SetText(length <= 0 ? LightPlugin.ColorData.ChatText : $"{length}/{__instance.textArea.characterLimit}");
-        __instance.charCountText.enableWordWrapping = false;
+        try
+        {
+            // ⚠️ 2026-10-06 加空守卫（日志实证刷屏）：
+            //   `System.NullReferenceException ... at UpdateCharCountPatch.Postfix(...):line 67`
+            //   `UpdateCharCount` 在 Awake/Start 阶段就会被调用一次，
+            //   而那会儿 `textArea` / `charCountText` **可能还没赋值**（都是 private 字段）。
+            //   原来没守卫 → 每次开聊天框都抛一次，把日志刷爆（也容易掩盖真正的问题）。
+            if (__instance == null) return;
+
+            var area = __instance.textArea;
+            var counter = __instance.charCountText;
+            if (area == null || counter == null) return;
+
+            int length = (area.text ?? "").Length;
+            counter.SetText(length <= 0
+                ? LightPlugin.ColorData.ChatText
+                : $"{length}/{area.characterLimit}");
+            counter.enableWordWrapping = false;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[UpdateCharCountPatch] {ex.Message}");
+        }
     }
 }
 

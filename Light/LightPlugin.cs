@@ -114,6 +114,11 @@ public partial class LightPlugin : BasePlugin
             // 依赖库释放
             try { Light.Audio.NativeLibraryLoader.PrepareBass(); } catch { }
 
+            // emoji / 符号字体 fallback（让聊天框能显示 😡👍 和特殊符号）
+            //   ⚠️ 和 RichTextInputPatch.IsCharAllowedPatch 是一对：
+            //      前者放开"能不能输入"，这里解决"能不能画出来"。
+            try { Light.Patches.RichTextInputPatch.SetupEmojiFallback(); } catch { }
+
             // BASS 播放器宿主
             try { Light.Audio.BassMusicPlayer.Ensure(); } catch { }
             ChatHistoryLogUtils.Init(); // 聊天历史记录。

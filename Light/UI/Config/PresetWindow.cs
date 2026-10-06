@@ -1048,7 +1048,9 @@ internal static class PresetToast
 ///
 /// 用户 2026-10-06："保存需要俩输入框。这俩输入框怎么说呢，HudUI 那个不好使，
 /// 你修一下 HudUI 的拿来用吧。"
-/// → 输入框已经修好并做进 <see cref="Light.UI.HudUI.HudUIInputField"/>，这里直接用。
+/// → 输入框用 **<see cref="Light.UI.Window.GUITextField"/>**（pull 下来的那份，H 帮助菜单在用）。
+///   它自己每帧读 <c>Input.inputString</c>，还处理中文输入法，**不依赖原版 TextBoxTMP 的聚焦体系** ——
+///   我原来克隆原版 <c>EnterCodeField</c>（`HudUIInputField`）那套在 HUD 窗口里根本收不到键盘，已删。
 ///
 /// ⚠️ 它和预设窗口、提示窗口是**三个独立窗口**：
 ///    开保存窗口时会关掉预设窗口（不然三个叠一起，点击关系很难理清）。
@@ -1069,8 +1071,8 @@ internal static class PresetSaveWindow
     private const float FieldCx = 0.42f;    // 输入框中心
 
     private static HudUIWindow? _w;
-    private static HudUIInputField? _nameField;
-    private static HudUIInputField? _authorField;
+    private static Light.UI.Window.GUITextField? _nameField;
+    private static Light.UI.Window.GUITextField? _authorField;
 
     public static bool IsOpen => _w != null && _w.GameObject != null;
 
@@ -1094,14 +1096,18 @@ internal static class PresetSaveWindow
 
             // ---- 预设名 ----
             AddLabel(root, "预设名", LabelX, RowNameY);
-            _nameField = HudUIInputField.Create(root,
-                new Vector2(FieldW, FieldH), "给这个预设起个名字", 24);
+            // ⚠️ 用 **GUITextField**（远端 pull 来的那份，H 帮助菜单在用）——
+            //    它自己每帧读 Input.inputString，还处理中文输入法（imeCompositionMode /
+            //    compositionString / 候选框跟随），不依赖原版 TextBoxTMP 的聚焦体系。
+            //    我原来克隆原版 EnterCodeField 那套在 HUD 窗口里根本收不到键盘。
+            _nameField = Light.UI.Window.GUITextField.Create(root,
+                new Vector2(FieldW, FieldH), "给这个预设起个名字");
             _nameField.SetPosition(new Vector3(FieldCx, RowNameY, -2f));
 
             // ---- 作者 ----
             AddLabel(root, "作者", LabelX, RowAuthorY);
-            _authorField = HudUIInputField.Create(root,
-                new Vector2(FieldW, FieldH), "留空 = 用你的玩家名", 16);
+            _authorField = Light.UI.Window.GUITextField.Create(root,
+                new Vector2(FieldW, FieldH), "留空 = 用你的玩家名");
             _authorField.SetPosition(new Vector3(FieldCx, RowAuthorY, -2f));
             _authorField.SetText(PresetLibrary.LocalPlayerName());   // 默认填玩家名
 
@@ -1131,6 +1137,20 @@ internal static class PresetSaveWindow
         finally { _w = null; _nameField = null; _authorField = null; }
     }
 
+    /// <summary>
+    /// 在窗口里放一个左对齐的标签。
+    ///
+    /// ⚠️⚠️ 2026-10-06 修（用户："预设名 作者偏了，图里能看见"）：
+    ///   <c>HudUIWindow.AddText</c> 建出来的 TMP 是**居中 pivot + 接近整窗宽的 rect**，
+    ///   而我们用 <c>TextAlignmentOptions.Left</c> —— 文字是从 <c>pos.x - rectWidth/2</c> 开始画的。
+    ///   所以直接给"想让它出现的 x"，实际会**往左偏半个 rect 宽**。
+    ///
+    ///   实测：LabelX = -2.35 应该落在屏幕 x≈358，实际跑到了 x≈40 ——
+    ///   差了 318px ≈ 2.65 单位，正好是半个 rect 宽 ✓ 对上了。
+    ///
+    ///   修法：把 pivot 改成 <c>(0, 0.5)</c>（左边缘为锚）+ 给一个固定的小宽度 → 此时 pos.x 就是文字左边缘。
+    ///   ⚠️ 这是本工程**第三次**踩同一类坑（前两次：RoleInfoPanel.PlaceIntro、ConfigUIPanel.AddRoleNameLabel）。
+    /// </summary>
     private static void AddLabel(Transform root, string text, float x, float y)
     {
         try
@@ -1142,6 +1162,11 @@ internal static class PresetSaveWindow
             tmp.fontSize = 1.55f;
             tmp.fontSizeMin = 1.55f;
             tmp.fontSizeMax = 1.55f;
+
+            // ★ 定宽 + 左边缘 pivot —— 这样下面的 x 才是"文字左边缘"
+            tmp.rectTransform.sizeDelta = new Vector2(1.10f, 0.40f);
+            tmp.rectTransform.pivot = new Vector2(0f, 0.5f);
+
             PresetWindow.PlaceInRoot(tmp.transform, root, new Vector3(x, y, -2f));
         }
         catch { }
