@@ -37,12 +37,28 @@ namespace LightInDark.Game
                     return;
                 }
                 CurrentReason = reason;
+                _forceEndRequested = true;
                 global::GameManager.Instance?.RpcEndGame(GameOverReason.CrewmatesByVote, true);
+                _forceEndRequested = false;
             }
             catch (System.Exception ex)
             {
                 LightLogger.LogError("[EndGameManager.TryEndGame]", ex);
             }
+        }
+
+        public static void MarkInvalid()
+        {
+            CurrentReason = GameEndReason.Invalid;
+        }
+
+        private static bool _forceEndRequested;
+
+        public static bool ConsumeForceEnd()
+        {
+            if (!_forceEndRequested) return false;
+            _forceEndRequested = false;
+            return true;
         }
 
         /// <summary>读取当前结束原因，若从未设置则返回 None。</summary>

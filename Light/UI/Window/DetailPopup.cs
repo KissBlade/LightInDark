@@ -73,7 +73,6 @@ public static class DetailPopup
             var parent = anchor != null ? anchor.parent : null;
             if (parent == null)
             {
-                LightLogger.LogWarning("[DetailPopup] anchor 没有父物体，无法定位，跳过显示");
                 return;
             }
 
@@ -454,48 +453,15 @@ public static class DetailPopup
 
         try
         {
-            LightLogger.Log($"[DetailPopup][诊断#{_diagLogs}] ================ 开始 ================");
 
             var cam = Camera.main;
-            if (cam != null)
-            {
-                LightLogger.Log($"[DetailPopup][诊断] Camera.main={cam.name} pos={cam.transform.position} ortho={cam.orthographic} size={cam.orthographicSize:F2} near={cam.nearClipPlane:F2} far={cam.farClipPlane:F2} mask={cam.cullingMask} depth={cam.depth} enabled={cam.enabled}");
-            }
-            else
-            {
-                LightLogger.Log("[DetailPopup][诊断] Camera.main = null");
-            }
 
-            foreach (var c in Camera.allCameras)
-            {
-                if (c == null) continue;
-                LightLogger.Log($"[DetailPopup][诊断] 相机 {c.name}: depth={c.depth} mask={c.cullingMask} ortho={c.orthographic} size={c.orthographicSize:F2} pos={c.transform.position} active={c.gameObject.activeInHierarchy}");
-            }
-
-            if (anchor != null)
-            {
-                LightLogger.Log($"[DetailPopup][诊断] 行 root: name={anchor.name} layer={anchor.gameObject.layer} active={anchor.gameObject.activeInHierarchy} local={anchor.localPosition} world={anchor.position} lossyScale={anchor.lossyScale}");
-            }
 
             DumpRenderer("[DetailPopup][诊断] 参考行", FindReferenceRenderer(anchor), cam);
             DumpRenderer("[DetailPopup][诊断] 框-底 ", _fill, cam);
             DumpRenderer("[DetailPopup][诊断] 框-上 ", _top, cam);
 
-            if (_root != null)
-            {
-                LightLogger.Log($"[DetailPopup][诊断] 框 root: layer={_root.layer} active={_root.activeInHierarchy} local={_root.transform.localPosition} world={_root.transform.position} lossyScale={_root.transform.lossyScale}");
-            }
 
-            if (_text != null)
-            {
-                LightLogger.Log($"[DetailPopup][诊断] 文字: layer={_text.gameObject.layer} active={_text.gameObject.activeInHierarchy} text=\"{_text.text}\" size={_text.fontSize:F2} color={_text.color} sorting={_text.sortingLayerID}/{_text.sortingOrder} world={_text.transform.position} lossyScale={_text.transform.lossyScale}");
-            }
-
-            int depth = 0;
-            for (var t = _root != null ? _root.transform.parent : null; t != null && depth < 4; t = t.parent, depth++)
-            {
-                LightLogger.Log($"[DetailPopup][诊断] 父[{depth}] {t.name}: layer={t.gameObject.layer} active={t.gameObject.activeInHierarchy} local={t.localPosition} world={t.position} lossyScale={t.lossyScale}");
-            }
         }
         catch (Exception ex)
         {

@@ -75,6 +75,8 @@ namespace LightInDark.UI.Ability
         {
             try
             {
+                if (IsBroken) return;
+
                 // 效果持续中再次点击 → 取消效果（默认允许）
                 if (_inEffect && AllowCancelByReclick)
                 {
@@ -185,6 +187,6 @@ namespace LightInDark.UI.Ability
 
         /// <summary>效果中始终可用（可取消）；否则看基础条件。</summary>
         protected override bool ShouldBeUsable
-            => _inEffect || (!_inCooldown && _config.CanUse() && (!HasLimitedUses || _usesLeft > 0));
+            => !IsBroken && (_inEffect || (!_inCooldown && _config.CanUse() && (!HasLimitedUses || _usesLeft > 0)));
     }
 }

@@ -35,6 +35,7 @@ namespace LightInDark.UI.Ability
 
                 if (HudManager.Instance != null && HudManager.Instance.AbilityButton != null)
                 {
+                    HudGrid.Ensure();
                     button.Create();
                 }
                 else
@@ -56,6 +57,7 @@ namespace LightInDark.UI.Ability
         {
             try
             {
+                HudGrid.Ensure();
                 foreach (var b in _pendingHud)
                 {
                     if (b.IsDeadObject) continue;
@@ -182,6 +184,7 @@ namespace LightInDark.UI.Ability
         {
             try
             {
+                HudGrid.Ensure();
                 RoleButtonManager.CreateAllHudButtons();
             }
             catch (System.Exception)
