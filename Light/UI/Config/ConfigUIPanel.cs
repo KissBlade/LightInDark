@@ -6,6 +6,7 @@ using HarmonyLib;
 using Il2CppInterop.Runtime.Injection;
 using Light.Config;
 using Light.Patches;
+using Light.UI.HudUI;          // HudUIButton
 using Light.UI.Window;
 using LightInDark.Configuration;
 using LightInDark.Core;
@@ -46,6 +47,34 @@ namespace Light.UI.Config
         private const float StartY = 0.713f;
         private const float RowX = 0.952f;
         private const float HeaderX = -0.903f;
+
+        /// <summary>
+        /// **单职业模式下各元素的左对齐基准**（用户 2026-10-06："怎么好看怎么来"）。
+        ///
+        /// ⚠️ 用**绝对值**而不是"普通页 + 偏移"：
+        ///    分类头和配置行的**内部布局不同** ——
+        ///    分类头的文字相对它自己的中心偏左约 0.97，配置行的标题相对行原点偏左约 1.11，
+        ///    所以"同一个偏移量"不可能让两者同时对齐（实测就是这么偏的）。
+        ///
+        /// 实测数据（用户截图反推，120px = 1 单位，local x=0 ↔ 屏幕 816）：
+        /// <code>
+        ///   元素              改前左边缘   改后
+        ///   返回按钮          -3.18       -3.00
+        ///   职业名            -2.43(压住按钮！)  -1.80
+        ///   职业配置(Head)    -2.22       -3.00
+        ///   配置行「数量」     -0.51       -3.00
+        /// </code>
+        ///
+        /// ⚠️ 普通分类页**完全不受影响**（那些仍走 <see cref="RowX"/> / <see cref="HeaderX"/>）。
+        /// </summary>
+        private const float SingleRowX = -1.84f;      // 用户 2026-10-06："让加号到我画的地方" → 整行右移 1.04（+ 从屏幕 728 → 850）
+        private const float SingleHeaderX = -2.03f;   // 分类头中心（其文字左边缘 ≈ -3.00）
+
+        /// <summary>配置行当前该用的 x。</summary>
+        private static float CurRowX => _singleBlock != null ? SingleRowX : RowX;
+
+        /// <summary>分类头当前该用的 x。</summary>
+        private static float CurHeaderX => _singleBlock != null ? SingleHeaderX : HeaderX;
         private const float HeaderHeight = 0.63f;
         private const float SpacingY = 0.45f;
         private const int MaskLayer = 20;
@@ -455,8 +484,48 @@ namespace Light.UI.Config
         ///
         /// 因此：能用原版容器就用原版容器，取不到才退回自建容器。
         /// </summary>
+        /// <summary>
+        /// **强制把行铺进调用方传入的容器**，跳过原版宿主与模板宿主。
+        ///
+        /// 用途：职业详情的**独立窗口**（<c>RoleDetailWindow</c>）。
+        /// 窗口没有原版的 Scroller，行必须铺进窗口自己的节点，
+        /// 否则会被 <see cref="ResolveRowContainer"/> 送回原版菜单 —— 表现是"窗口是空的"。
+        ///
+        /// ⚠️ 用完必须关掉（<c>SetForceOwnContainer(false)</c>），否则原版规则编辑界面也会跑到自建容器里。
+        /// </summary>
+        public static void SetForceOwnContainer(bool value) => _forceOwnContainer = value;
+
+        /// <summary>
+        /// 藏掉单职业模式顶部那个「&lt; 返回」按钮。
+        /// 用途：独立窗口用右上角的 X 关窗，不需要再来一个返回（用户 2026-10-06 要求）。
+        /// </summary>
+        public static void SetHideBackButton(bool value) => _hideBackButton = value;
+
+        private static bool _hideBackButton;
+
+        private static bool _forceOwnContainer;
+
+        /// <summary>
+        /// 实际用的行容器（诊断用）。
+        /// </summary>
+        internal static string ContainerName => _container != null ? _container.name : "(null)";
+
+        /// <summary>
+        /// 行容器解析。优先原版 settingsContainer（TONE 同做法），见下方注释。
+        /// 因此：能用原版容器就用原版容器，取不到才退回自建容器。
+        /// </summary>
         private static Transform ResolveRowContainer(Transform fallback)
         {
+            // ⚠️⚠️ **独立窗口模式必须直接用自己的容器**（2026-10-06）。
+            //
+            //  用户截图：二级职业窗口打开了、尺寸黑幕都对，**但里面是空的**。
+            //  原因就是这里 —— 我只把 `_hostMenu` 摘成 null，但这个方法是
+            //  `_hostMenu ?? _templates`，**`_templates` 还在**（它是原版菜单的 GameOptionsMenu），
+            //  于是行被铺回了**原版菜单的滚动容器**，根本不在窗口里。
+            //
+            //  所以窗口模式要一个更强的开关：连 `_templates` 也跳过，直接用传入的 fallback。
+            if (_forceOwnContainer) return fallback;
+
             try
             {
                 var host = _hostMenu ?? _templates;
@@ -469,6 +538,30 @@ namespace Light.UI.Config
                 // 而 Scroller.Inner 是同一个物体的**公开字段**，任何克隆体上都能正确读到。
                 // 原版自己也是把行 Instantiate 到 settingsContainer（== Scroller.Inner）下的。
                 var inner = TryGetScrollerInner(host);
+
+                // ⚠️⚠️⚠️ **已知坏容器：名字是 "SliderInner"** —— 拒绝它。
+                //
+                //  2026-10-06 日志实证（这就是"第一次进完全是歪的，之后一直是第二次的样子"的根因）：
+                // <code>
+                //  14:18:27  模式=单职业，容器=SliderInner，      累计实例化=2   ← 第一次，歪的
+                //  14:18:28  模式=单职业，容器=LightConfigPage，  累计实例化=4   ← 第二次起，正的
+                //  行容器使用 Scroller.Inner 'SliderInner' (localPos=(0.00, 0.00, -4.00), childCount=22)
+                // </code>
+                //  那个 `childCount=22` 和下面第 525 行注释里记的坏容器**一模一样** ——
+                //  它是个滑块，不是行容器；行铺进去当然整个是歪的。
+                //
+                //  ⚠️ 下面那段注释原来断言"`Scroller.Inner` 是公开字段，任何克隆体上都能正确读到"，
+                //     这条**在第一次调用时不成立**：菜单还没跑过 Start/Initialize，`scrollBar.Inner`
+                //     指向的还不是行容器。第二次起菜单已初始化，才指向正确的那个。
+                //     （用名字判定不优雅，但这是目前唯一能区分"初始化前/后"的稳定特征，
+                //       而且这个名字已经被本文件的注释当成"坏容器"记下来了。）
+                if (inner != null && inner.name == "SliderInner")
+                {
+                    LightLogger.LogWarning("[ConfigUIPanel] Scroller.Inner 指向了 'SliderInner'（已知坏容器，是个滑块）" +
+                                           "，拒绝使用，退回自建容器（这是第一次进页面时的正常现象）");
+                    inner = null;
+                }
+
                 if (inner != null && inner.gameObject.activeInHierarchy)
                 {
                     LightLogger.Log($"[ConfigUIPanel] 行容器使用 Scroller.Inner '{inner.name}' " +
@@ -479,6 +572,21 @@ namespace Light.UI.Config
                     LightLogger.LogWarning($"[ConfigUIPanel] Scroller.Inner '{inner.name}' 未激活，继续找备选");
 
                 var hostSc = host?.settingsContainer;
+
+                // ⚠️⚠️ 这里**也要拦 'SliderInner'** —— 2026-10-06 日志实证：
+                //    上面那条 `Scroller.Inner` 的拦截生效之后，代码紧接着落到这个备选分支，
+                //    而 `settingsContainer` **指向的又是同一个 'SliderInner'**：
+                // <code>
+                //   [ConfigUIPanel] Scroller.Inner 指向了 'SliderInner'（已知坏容器）...拒绝使用
+                //   [ConfigUIPanel] 行容器使用 settingsContainer 'SliderInner' (childCount=22)   ← 又中招
+                // </code>
+                //    原版这两个字段在"菜单还没初始化"时都会指向那个滑块，所以**两处都要拦**。
+                if (hostSc != null && hostSc.name == "SliderInner")
+                {
+                    LightLogger.LogWarning("[ConfigUIPanel] settingsContainer 也指向了 'SliderInner'（同上），拒绝使用，退回自建容器");
+                    hostSc = null;
+                }
+
                 if (hostSc != null && hostSc.gameObject.activeInHierarchy)
                 {
                     LightLogger.Log($"[ConfigUIPanel] 行容器使用 settingsContainer '{hostSc.name}' " +
@@ -542,10 +650,40 @@ namespace Light.UI.Config
                 float lastY;
                 if (_singleBlock != null)
                 {
-                    // 单职业模式（独立新页面，标签行已隐藏）：返回按钮在原标签行位置，仅渲染这一个块
-                    float y = AddBackButton(0.8f);
+                    // ---- 单职业模式 ----
+                    //
+                    // ⚠️ 2026-10-06 用户："返回放我圈的位置" + "这个详情页上面是不是又被隐藏的地图
+                    //    选项顶了？" —— 两个问题同源，都在这里：
+                    //
+                    //    · 原来 `AddBackButton(0.8f)`，返回按钮在 y=0.8，
+                    //      而它返回 0.8-0.38-0.06 = **0.36** 当内容起点 → 整块被压得很低
+                    //      （普通页的内容起点是 StartYFor = 1.313，低了约 0.95 ≈ 114px）。
+                    //    · 单职业模式**不需要** StartYFor 那个 +0.60 ——
+                    //      那是给原版"地图预览"留的高度，而这一页根本不显示地图预览
+                    //      （ClearVanillaContent 已经把它隐藏了）。
+                    //
+                    //    现在：返回按钮放高一点（用户圈的位置 ≈ 本地 y 1.05），
+                    //    内容紧接在它下面开始。
+                    const float backY = 1.05f;
+                    var roleTpl = RoleListPage.FindRole(_singleBlock);
+
+                    if (!_hideBackButton) AddBackButton(backY);
+                    AddRoleNameLabel(backY, roleTpl);     // ★ 职业名（放返回键旁边）
+
+                    float y = backY - BackBtnH - 0.14f;   // 内容从返回按钮下方开始
                     startY = y;
-                    lastY = BuildBlock(_singleBlock, y);
+
+                    // ★ 单职业模式**不再建"写职业名的分类头"**（用户："把原来那个上面写职业名的 Head 删掉"）。
+                    //   改成：立绘区 → 「职业配置」头（原色）→ 配置项
+                    AddRoleArt(roleTpl);                  // 立绘 → 固定右下角，不占排版空间
+                    y = AddCategoryHeader(_singleBlock, y, "职业配置", useOriginalColor: true);
+
+                    foreach (var item in _singleBlock.Items)
+                    {
+                        if (!item.IsVisible) continue;
+                        y = AddConfigRow(item, y);
+                    }
+                    lastY = y;
                 }
                 else
                 {
@@ -559,7 +697,11 @@ namespace Light.UI.Config
                     lastY = y;
                 }
 
-                LightLogger.Log($"[ConfigUIPanel] 已构建配置面板：行 {_rowCount} 个，子物体 {_spawned.Count} 个");
+                LightLogger.Log($"[ConfigUIPanel] 已构建配置面板：行 {_rowCount} 个，子物体 {_spawned.Count} 个" +
+                                $"，模式={(_singleBlock != null ? "单职业" : "分类")}" +
+                                $"，startY={startY:F3}，lastY={lastY:F3}" +
+                                $"，容器={(_container != null ? _container.name : "null")}" +
+                                $"，本会话累计实例化={_instantiated}");   // ★ 诊断"第一次/第二次不一样"
                 SnapshotBuiltKeys();     // 记录"实际建出了哪些行"，供 Refresh 做集合比较
                 if (hostForClean != null)
                 {
@@ -809,32 +951,228 @@ namespace Light.UI.Config
             return y;   // 返回最后用掉到哪个 y，供滚动条算高度
         }
 
-        /// <summary>单职业模式顶部的返回按钮，返回下一个 y。</summary>
+        /// <summary>
+        /// 单职业模式**左上角**的返回按钮，返回下一个 y。
+        ///
+        /// ⚠️ 2026-10-06 第三次改（用户："返回的 X 删掉，改成左上角放一个返回按钮，
+        ///    返回用 HudUI，label：返回"）：
+        ///    · 第一版是**手画**的圆角块 + 「&lt; 返回」文字；
+        ///    · 第二版克隆 `GameSettingMenu.BackButton` —— **出来的是个 X 图标按钮**，不是想要的；
+        ///    · 现在用 **HudUI 的按钮**（<c>HudUIButton.Create</c>），label 就是「返回」。
+        /// </summary>
         private static float AddBackButton(float y)
         {
-            var go = NewUIObject("LightConfigBack", _container, new Vector3(HeaderX + 0.35f, y, RowZ));
+            try
+            {
+                var btn = Light.UI.HudUI.HudUIButton.Create(
+                    _container, "返回", new Vector2(BackBtnW, BackBtnH),
+                    () => _onBack?.Invoke());
+
+                if (btn != null && btn.GameObject != null)
+                {
+                    btn.SetPosition(new Vector3(BackBtnX, y, RowZ));
+                    _spawned.Add(btn.GameObject);
+
+                    // 用户规矩（AGENTS.md §12.1）：除特殊说明所有字都 Bold
+                    if (btn.Text != null)
+                    {
+                        try { MenuTextTemplate2.ApplyFont(btn.Text); } catch { }
+                        btn.Text.fontStyle = FontStyles.Bold;
+                    }
+
+                    LightLogger.Log($"[ConfigUIPanel] 返回按钮已用 HudUI 建好（左上角 {BackBtnX}, {y}）");
+                    return y - BackBtnH - 0.06f;
+                }
+
+                LightLogger.LogWarning("[ConfigUIPanel] HudUIButton.Create 返回 null，退回手画");
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.AddBackButton] HudUI 返回按钮失败: {ex.Message}");
+            }
+
+            // ---- 保底：手画一个（老实现，保留） ----
+            var go = NewUIObject("LightConfigBack", _container, new Vector3(BackBtnX, y, RowZ));
             _spawned.Add(go);
 
             var sr = go.AddComponent<SpriteRenderer>();
             sr.sprite = GetRoundedSprite();
             sr.drawMode = SpriteDrawMode.Sliced;
-            sr.size = new Vector2(0.9f, 0.32f);
+            sr.size = new Vector2(BackBtnW, BackBtnH);
             sr.color = new UColor(0.2f, 0.2f, 0.2f, 0.9f);
 
-            MenuTextTemplate.Create(go.transform, new Vector3(0f, 0f, -0.1f), "< 返回", 0.8f);
+            MenuTextTemplate.Create(go.transform, new Vector3(0f, 0f, -0.1f), "返回", 0.8f);
 
             var col = go.AddComponent<BoxCollider2D>();
             col.isTrigger = true;
-            col.size = new Vector2(0.9f, 0.32f);
+            col.size = new Vector2(BackBtnW, BackBtnH);
 
-            var pb = go.SetUpButton(true, null, null, null, false);
-            pb.OnClick.AddListener((UnityAction)(() => _onBack?.Invoke()));
+            var pbf = go.SetUpButton(true, null, null, null, false);
+            pbf.OnClick.AddListener((UnityAction)(() => _onBack?.Invoke()));
 
-            return y - 0.42f;
+            return y - BackBtnH - 0.06f;
         }
 
+        // ---- 返回按钮的尺寸与位置（用户要"左上角"，偏左放；嫌偏直接改这两个数）----
+        private const float BackBtnW = 0.95f;
+        private const float BackBtnH = 0.38f;
+        private const float BackBtnX = -2.525f;  // 中心；左边缘 = -3.00（和分类头/配置行统一左对齐）
+
+        // =====================================================================
+        //  单职业模式专用件（用户 2026-10-06 设计图）
+        // =====================================================================
+
+        /// <summary>职业名放返回键旁边（复用右侧面板那套：职业自己的颜色 + 大字 + Bold）。</summary>
+        private static void AddRoleNameLabel(float y, LightInDark.Roles.RoleTemplate? role)
+        {
+            try
+            {
+                if (role == null) return;
+
+                // ⚠️⚠️ **位置要按"文字左边缘"算，不能直接把 pos.x 当左边缘。**
+                //
+                //  `MenuTextTemplate2.Create` 建出来的 TMP 用的是**模板自带的 rect + 居中 pivot**，
+                //  而我们把对齐设成 Left → 文字是从 `pos.x - rectWidth/2` 开始画的。
+                //  所以直接传"想让它出现的 x"会**往左偏半个 rect 宽** ——
+                //  用户截图里职业名压到返回按钮上，就是这个原因
+                //  （和 RoleInfoPanel 早先 PlaceIntro 的坑同源，见 AGENTS.md §4.7）。
+                //
+                //  正确做法：先定 rect 宽，再反推 pos.x = 目标左边缘 + 宽/2。
+                var tmp = MenuTextTemplate2.Create(_container,
+                    new Vector3(NameLeft + NameW * 0.5f, y, RowZ - 0.1f),
+                    role.Name, RoleNameFontSize,
+                    LightInDark.ColorHelper.ToUnityColor(role.Color));
+                if (tmp == null) return;
+
+                // 固定 rect 宽（这样上面的反推才成立）
+                tmp.rectTransform.sizeDelta = new Vector2(NameW, tmp.rectTransform.sizeDelta.y);
+                tmp.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+
+                // ⚠️ 必须关 autoSizing 并锁死字号，否则 fontSize 完全不生效（AGENTS.md §12.2）
+                tmp.enableAutoSizing = false;
+                tmp.fontSize = RoleNameFontSize;
+                tmp.fontSizeMin = RoleNameFontSize;
+                tmp.fontSizeMax = RoleNameFontSize;
+
+                tmp.fontStyle = FontStyles.Bold;                       // §12.1 所有字默认 Bold
+                tmp.alignment = TextAlignmentOptions.Left;
+                tmp.enableWordWrapping = false;
+                tmp.overflowMode = TextOverflowModes.Overflow;         // 名字不能裁（§12.3）
+
+                _spawned.Add(tmp.gameObject);
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.AddRoleNameLabel] {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 立绘区（设计图里那个白框）。
+        /// 贴图取 <c>RoleTemplate.RoleImage</c>（职业自己重写 RoleImagePath 提供）；
+        /// 没配图的职业**不占位**，直接返回原 y，后面的内容自动上移。
+        /// 透明度用 Nebula 的值（Help.cs:492 <c>SetBackImage(..., 0.2f)</c>）。
+        /// </summary>
+        /// <summary>
+        /// 职业立绘 —— 固定在**右下角**，而且**不占排版空间**。
+        ///
+        /// ⚠️ 2026-10-06 用户："更怪了。立绘放右下角吧"。
+        ///    前一版它是跟着排版流走的（返回职业名→立绘→职业配置→配置项），
+        ///    结果夹在中间、还把「职业配置」挤下去，整体很怪。
+        ///    现在改成**绝对定位**：固定落在右下角，配置项从返回按钮下面直接开始排，
+        ///    互不干扰。（也不再有 y 的进进出出，调用处不用接返回值。）
+        /// </summary>
+        private static void AddRoleArt(LightInDark.Roles.RoleTemplate? role)
+        {
+            try
+            {
+                var sprite = role?.RoleImage;
+                if (sprite == null) return;      // 没配图的职业不显示，也不占位
+
+                var go = NewUIObject("LightRoleArt", _container,
+                    new Vector3(RoleArtX, RoleArtY, RowZ + 0.25f));
+                var sr = go.AddComponent<SpriteRenderer>();
+                sr.sprite = sprite;
+
+                // ⚠️⚠️⚠️ **必须设 drawMode + size**（2026-10-06 用户："立绘歪了"）。
+                //
+                //  只设 sprite 的话，SpriteRenderer 按**贴图的原始像素尺寸**渲染：
+                //  立绘画布通常是 1024×1024，而我们的 PPU = 115
+                //  → 8.9 个世界单位，**直接把大半个屏幕盖住**（实测就是这样，
+                //    截图里立绘从内容区一直铺到右侧滚动条外面）。
+                //
+                //  本工程画"任意尺寸的图"一律用这套：`Sliced` + `size`
+                //  （见 AGENTS.md §4.3.3；RoleListPage / BackgroundPanel / MusicPlayerWindow 同款）。
+                sr.drawMode = SpriteDrawMode.Sliced;
+
+                // ★★ **按原图宽高比缩放**（用户 2026-10-06："立绘压的不成样子"）。
+                //
+                //  原来直接 `size = (RoleArtW, RoleArtH)` 是**硬拉伸** ——
+                //  原图什么样都会被拉进那个矩形：横的更长、竖的更扁，脸都变形。
+                //
+                //  现在把 RoleArtW × RoleArtH 当作**上限框**：
+                //  先按最大宽算高，装不下就反过来按最大高算宽 → 等比缩放到框内。
+                //  ⚠️ 所以这两个常量现在是"最多占多大"，**不是**强制尺寸。
+                float aspect = 1f;
+                try
+                {
+                    var b = sprite.bounds.size;
+                    if (b.y > 0.001f && b.x > 0.001f) aspect = b.x / b.y;
+                }
+                catch { }
+
+                float artW = RoleArtW, artH = RoleArtW / aspect;
+                if (artH > RoleArtH) { artH = RoleArtH; artW = RoleArtH * aspect; }
+
+                sr.size = new Vector2(artW, artH);
+                LightLogger.LogDebug($"[ConfigUIPanel] 立绘 size={artW:F2}×{artH:F2}（原图比例 {aspect:F3}，框 {RoleArtW}×{RoleArtH}）");
+
+                sr.color = new Color(1f, 1f, 1f, RoleArtAlpha);
+                _spawned.Add(go);
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.AddRoleArt] {ex.Message}");
+            }
+        }
+
+        /// <summary>只写分类头文字、**不改颜色**（用户要的"用原色"）。</summary>
+        private static void SetHeaderTextRaw(CategoryHeaderMasked header, string text)
+        {
+            try
+            {
+                if (header == null) return;
+                var tmp = header.GetComponentInChildren<TextMeshPro>(true);
+                if (tmp != null)
+                {
+                    tmp.text = text;
+                    tmp.fontStyle = FontStyles.Bold;      // §12.1
+                    tmp.ForceMeshUpdate();
+                }
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.SetHeaderTextRaw] {ex.Message}");
+            }
+        }
+
+        // ---- 单职业模式的尺寸（嫌不对直接改这几个）----
+        private const float RoleNameFontSize = 2.40f;
+        /// <summary>职业名文字左边缘（返回按钮右边留 0.25 的间隙）。</summary>
+        private const float NameLeft = -1.80f;
+        /// <summary>职业名的 rect 宽（左对齐定宽，位置靠它反推）。</summary>
+        private const float NameW = 2.60f;
+        private const float RoleArtX = 1.70f;      // 立绘中心 x —— 略左一点，给放大后留出右边空间
+        private const float RoleArtH = 4.30f;
+        /// <summary>立绘显示宽（⚠️ 必须给，否则按 PNG 原始像素尺寸渲染，会盖满屏幕）。</summary>
+        private const float RoleArtW = 3.50f;      // 用户："立绘再大点"（上限框，实际尺寸按原图比例）
+        private const float RoleArtY = -1.23f;     // 立绘中心 y —— 右列竖长条（用户红框：屏幕 y 258~730）
+        private const float RoleArtAlpha = 0.20f;    // Nebula Help.cs:492 用的 0.2f
         /// <summary>金色分类头：克隆原版 CategoryHeaderMasked。</summary>
-        private static float AddCategoryHeader(ConfigBlock block, float y)
+        /// <param name="labelOverride">覆盖要显示的标题文字；null = 用 block.DisplayName。</param>
+        /// <param name="useOriginalColor">true = **不染成职业色**，保持原版分类头的本色（用户："用原色"）。</param>
+        private static float AddCategoryHeader(ConfigBlock block, float y,
+            string? labelOverride = null, bool useOriginalColor = false)
         {
             try
             {
@@ -846,14 +1184,25 @@ namespace Light.UI.Config
                 }
 
                 var header = Object.Instantiate(origin, Vector3.zero, Quaternion.identity, _container);
+
+                // 分类头同理：它是 CategoryHeaderMasked 克隆体，也可能带 AspectPosition
+                DisableAspectPositionOn(header.transform);
                 header.name = $"LightConfigHeader_{block.Key}";
                 header.transform.localScale = Vector3.one * HeaderHeight;
-                header.transform.localPosition = new Vector3(HeaderX, y, RowZ);
+                header.transform.localPosition = new Vector3(CurHeaderX, y, RowZ);
                 header.gameObject.SetActive(true);
                 _spawned.Add(header.gameObject);
 
                 // 头文字：SetHeader 走 StringNames，我们用翻译槽位塞自定义文本
-                SetHeaderText(header, block);
+                if (useOriginalColor)
+                {
+                    // "用原色"：只写文字，**不调 SetHeaderColor** —— 保持原版分类头本来的颜色。
+                    SetHeaderTextRaw(header, labelOverride ?? block.DisplayName);
+                }
+                else
+                {
+                    SetHeaderText(header, block);
+                }
 
                 y -= HeaderHeight;
                 return y;
@@ -1384,6 +1733,55 @@ namespace Light.UI.Config
         }
 
         /// <summary>建一行配置项（克隆原版控件 + 合成 setting），返回下一个 y。</summary>
+        /// <summary>
+        /// 禁掉该物体及最近 3 层祖先上的 <see cref="AspectPosition"/>。
+        ///
+        /// ⚠️⚠️ **原版设置行必须禁掉它**（2026-10-06 修"独立窗口里内容不跟着窗口走"）。
+        ///
+        ///  原版行是 <c>OptionBehaviour</c> 克隆体，**自带 <c>AspectPosition</c>** ——
+        ///  它每帧按**屏幕比例**重算**世界坐标**（`updateAlways`），所以我们把它挂到哪个
+        ///  父物体下都没用：它会被拽回"原版菜单里的那个屏幕位置"。
+        ///
+        ///  症状极具辨识度：**窗口框动了、里面的行纹丝不动** ——
+        ///  因为窗口是我们 `new` 的物体（跟着父物体走），行是原版克隆体（被 AspectPosition 拽住）。
+        ///
+        ///  为什么在原版容器里看不出问题：那时 AspectPosition 算出来的**就是**我们想要的位置
+        ///  （行本来就该在菜单里那个地方），所以一直没暴露。
+        ///
+        ///  我们的行位置全是自己算的（见 <c>ApplyRowLayout</c> / <c>Relayout</c>），
+        ///  所以**两种场合都该禁**。
+        ///  只往上查 3 层：再往上就是整个菜单的锚点，动它会破坏菜单自身的自适应。
+        ///  （同 <c>SettingsTabPatch.DisableAspectPosition</c>）
+        /// </summary>
+        private static void DisableAspectPositionOn(Transform? t)
+        {
+            // ⚠️ **只在"行铺进我们自己的容器"时才禁**。
+            //
+            //  就地嵌入模式（默认）下，行还铺在**原版菜单的滚动容器**里 ——
+            //  那时 AspectPosition 算出来的**正好就是**我们想要的位置（我们那套
+            //  RowX / StartY / SpacingY 常量本来就是照原版 GameOptionsMenu.CreateSettings 抄的），
+            //  禁掉反而等于改了既有行为、有搞坏滚动/布局的风险。
+            //
+            //  只有独立窗口模式（_forceOwnContainer）才必须禁 —— 否则行会被拽回原版位置，
+            //  表现是"窗口框动了、里面的行纹丝不动"。
+            if (!_forceOwnContainer) return;
+
+            try
+            {
+                var cur = t;
+                for (int depth = 0; cur != null && depth < 3; depth++, cur = cur.parent)
+                {
+                    var ap = cur.GetComponent<AspectPosition>();
+                    if (ap == null || !ap.enabled) continue;
+                    ap.enabled = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.DisableAspectPositionOn] {ex.Message}");
+            }
+        }
+
         private static float AddConfigRow(ConfigItem item, float y)
         {
             try
@@ -1413,7 +1811,16 @@ namespace Light.UI.Config
                 var clone = Object.Instantiate(origin, Vector3.zero, Quaternion.identity, _container);
                 clone.gameObject.name = $"LightConfigRow_{item.Key}";
                 _instantiated++;   // 诊断：本次会话一共实例化过多少行
-                clone.transform.localPosition = new Vector3(RowX, y, RowZ);
+
+                // ⚠️⚠️ **原版行自带 AspectPosition，必须禁掉**（2026-10-06 修"窗口里内容不跟着走"）。
+                //    它每帧按**屏幕比例**重算**世界坐标**（updateAlways），所以我们把行挂到哪个
+                //    父物体下都没用 —— 它会被拽回"原版菜单里的那个屏幕位置"。
+                //    症状极具辨识度：**窗口框动了、里面的行纹丝不动**
+                //    （窗口是我们 new 的物体跟着父物体走，行是原版克隆体被 AspectPosition 拽住）。
+                //    在原版容器里看不出问题，是因为那时它算出来的**正好**是想要的位置。
+                DisableAspectPositionOn(clone.transform);
+
+                clone.transform.localPosition = new Vector3(CurRowX, y, RowZ);
 
                 // ⚠️⚠️ 实测（日志）：
                 //     ApplyRowLayout 进入 lid.debug.enabled rowType=OptionBehaviour isToggle=False
@@ -1516,6 +1923,13 @@ namespace Light.UI.Config
 
                 WireHover(clone.gameObject, item);
 
+                // ★ 用户建议的兜底：在行上盖一个**透明触发层**，用它的悬停驱动说明文字。
+                //   原版行自己的 PassiveButton 悬停没能触发（用户："还是没显示"），
+                //   与其继续猜它为什么不动，不如自己放一个完全可控的。
+                //   ⚠️ 给它一个**空的 OnClick**，这样它只负责"悬停"，
+                //      点击仍然由行自己的 +/- 按钮处理（PassiveButtonManager 不看 z，两个都会收到）。
+                AddHoverTrigger(clone, item);
+
                 _rowCount++;
                 return y - SpacingY;
             }
@@ -1530,6 +1944,164 @@ namespace Light.UI.Config
         /// 悬浮显示详情（走本工程已有的 DetailPopup）。
         /// 原版行自带 BoxCollider2D + PassiveButton，所以这里只追加监听，不新增碰撞区。
         /// </summary>
+        // =====================================================================
+        //  原版左上角那块描述文字（GameSettingMenu.MenuDescriptionText）
+        //
+        //  用户 2026-10-06："看我截图画的地方，那里的文字能改吗？如果可以，那么这么做：
+        //  鼠标放到某个配置项上时，显示一段文字，这个文字定义时写好，是可选形参，
+        //  如果没有那就让原版显示。"
+        //
+        //  · "那块文字" = GameSettingMenu 的 MenuDescriptionText（原版 private 字段，
+        //    interop 里是 public 属性，能直接读写）。
+        //  · "可选形参" = ConfigItem.AddConfiguration(..., detail:) —— **已经有了**，不用新增。
+        //  · TONE 的用法见参考源码 GameOptionsMenuPatch.cs:710。
+        // =====================================================================
+
+        /// <summary>我们最后写进去的文字（null = 当前不是我们在显示）。</summary>
+        private static string? _ourDesc;
+
+        /// <summary>被我们顶掉的原版文字，移出时还回去。</summary>
+        private static string? _vanillaDesc;
+
+        private static TextMeshPro? DescText
+        {
+            get
+            {
+                try
+                {
+                    var menu = GameSettingMenu.Instance;
+                    return menu != null ? menu.MenuDescriptionText : null;
+                }
+                catch { return null; }
+            }
+        }
+
+        /// <summary>鼠标悬停某行：把该行的 detail 写到原版描述文字里。<paramref name="text"/> 空则**什么都不做**。</summary>
+        private static void ShowRowDescription(string? text)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(text)) return;    // 没写 detail → 让原版显示
+
+                var tmp = DescText;
+                if (tmp == null)
+                {
+                    // 一次性诊断：区分"菜单拿不到"还是"字段读不到"
+                    // （用户反馈"显示文字并没出现"，没有这条就只能猜）
+                    LightLogger.LogWarning("[ConfigUIPanel.ShowRowDescription] 拿不到 MenuDescriptionText" +
+                                           $"（GameSettingMenu.Instance={(GameSettingMenu.Instance != null ? "有" : "null")}）");
+                    return;
+                }
+
+                // 先备份"当前显示的不是我们写的"那段 —— 那才是原版文字。
+                // （不能只备份一次：切页签时原版会换文字。）
+                var cur = tmp.text ?? "";
+                if (_ourDesc == null || cur != _ourDesc) _vanillaDesc = cur;
+
+                _ourDesc = text;
+                tmp.SetText(text);
+                tmp.fontStyle = FontStyles.Bold;               // §12.1
+                tmp.ForceMeshUpdate();
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogDebug($"[ConfigUIPanel.ShowRowDescription] {ex.Message}");
+            }
+        }
+
+        /// <summary>鼠标移出：把原版文字还回去。</summary>
+        private static void RestoreRowDescription()
+        {
+            try
+            {
+                if (_ourDesc == null) return;      // 没顶过，别乱动
+                var tmp = DescText;
+                if (tmp != null && _vanillaDesc != null) tmp.SetText(_vanillaDesc);
+                _ourDesc = null;
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogDebug($"[ConfigUIPanel.RestoreRowDescription] {ex.Message}");
+            }
+        }
+        /// <summary>
+        /// 在配置行上盖一层**透明悬停触发器**（用户 2026-10-06 的建议："在上面放一个隐藏的按钮，
+        /// 咱们用那个触发"）。
+        ///
+        /// 为什么需要它：原版行自己的 <c>PassiveButton.OnMouseOver</c> 挂了监听但没触发
+        /// （用户："还是没显示"）。与其继续猜原版那边为什么不动，不如自己放一个完全可控的。
+        ///
+        /// ⚠️ 给它**空的 OnClick** —— 它只负责"悬停"，点击仍旧由行自己的 −/＋ 按钮处理。
+        ///    `PassiveButtonManager` **完全不看 z**（AGENTS.md §4.3），所以两层都会收到事件；
+        ///    我们这层什么都不做，就不会抢走点击。
+        ///
+        /// ⚠️ 尺寸取行的碰撞盒；拿不到就用一个够大的兜底值。
+        /// </summary>
+        private static void AddHoverTrigger(OptionBehaviour row, ConfigItem item)
+        {
+            try
+            {
+                if (row == null || item == null) return;
+                if (string.IsNullOrWhiteSpace(item.Detail)) return;   // 没写 detail → 不用触发器
+
+                var go = new GameObject("LightRowHover");
+                go.layer = LayerExpansion.GetUILayer();
+                go.transform.SetParent(row.transform, false);
+                go.transform.localScale = Vector3.one;
+
+                // ★★ **排在行内元素的后面（z 更大 = 更深）** —— 用户 2026-10-06 的方案：
+                //    "你这个会把减号挡住按不了。你给他层级往下排点还能检测到吗，如果能那就这么干。"
+                //
+                //    ✅ 能，原版源码（PassiveButtonManager.cs）给了确切机制：
+                //      · Update() 先按 CachedZ **升序排序**（L49-56），即"由前到后"；
+                //      · HandleMouseOver(L245) 只跟 currentOver 比：
+                //          `if (button.z > currentOver.z) return;`  ← 更深的一律跳过；
+                //      · `currentOver` 是**单个字段** → 同一时刻只有一个按钮被悬停。
+                //    所以排到后面之后：
+                //      · 鼠标压在 −/＋/数值框上 → 那些更靠前，它们赢，我们的层不触发（不再挡操作）
+                //      · 鼠标在行内其它地方      → 只有我们在鼠标下 → 我们赢 → 显示说明
+                //
+                //    点击也不受影响：L58 那个循环对**每个**碰撞盒重叠的按钮都调 CheckDrag，
+                //    并不是"只给最靠前那个"。
+                //
+                //    z 取 +0.6：行根自身在 RowZ，行内控件一般在其附近；排在它们后面即可。
+                go.transform.localPosition = new Vector3(0f, 0f, 0.6f);
+
+                var col = go.AddComponent<BoxCollider2D>();
+                col.isTrigger = true;
+                var src = row.GetComponent<BoxCollider2D>();
+                col.size = (src != null && src.size.x > 0.1f) ? src.size : new Vector2(4.6f, 0.62f);
+
+                var pb = go.AddComponent<PassiveButton>();
+                pb.OnClick = new UnityEngine.UI.Button.ButtonClickedEvent();   // 空的：不抢点击
+                pb.OnMouseOver = new UnityEngine.Events.UnityEvent();
+                pb.OnMouseOut = new UnityEngine.Events.UnityEvent();
+
+                var detail = item.Detail;
+                pb.OnMouseOver.AddListener((UnityAction)(() => ShowRowDescription(detail)));
+                pb.OnMouseOut.AddListener((UnityAction)(() => RestoreRowDescription()));
+
+                // 诊断：把涉及到的 z 全打出来（谁在谁前面一目了然，下轮不用再猜）
+                string zInfo;
+                try
+                {
+                    zInfo = $"行根z={row.transform.position.z:F2} 本层z={go.transform.position.z:F2}";
+                    foreach (var t in row.GetComponentsInChildren<Transform>(true))
+                    {
+                        if (t.name == "MinusButton") zInfo += $" 减号z={t.position.z:F2}";
+                        else if (t.name == "PlusButton") zInfo += $" 加号z={t.position.z:F2}";
+                    }
+                }
+                catch { zInfo = "(z 读取失败)"; }
+
+                LightLogger.Log($"[ConfigUIPanel] 已为 {item.Key} 建悬停触发器（size={col.size}，detail 长度={detail?.Length ?? 0}）| {zInfo}");
+            }
+            catch (Exception ex)
+            {
+                LightLogger.LogWarning($"[ConfigUIPanel.AddHoverTrigger] {ex.Message}");
+            }
+        }
+
         private static void WireHover(GameObject row, ConfigItem item)
         {
             if (item == null || string.IsNullOrWhiteSpace(item.Detail)) return;
@@ -1543,8 +2115,16 @@ namespace Light.UI.Config
                 pb.OnMouseOut ??= new Button.ButtonClickedEvent();
 
                 var text = item.Detail;
-                pb.OnMouseOver.AddListener((UnityAction)(() => DetailPopup.Show(text, true, row.transform)));
-                pb.OnMouseOut.AddListener((UnityAction)(() => DetailPopup.Hide()));
+
+                // ⚠️ 2026-10-06 改：悬停时把说明写进**原版左上角那块描述文字**
+                //    （用户设计图上圈的就是它；TONE 也是这么做的 ——
+                //     `GameSettingMenu.Instance.MenuDescriptionText.SetText(info)`，
+                //      见 TONE 的 GameOptionsMenuPatch.cs:710）。
+                //    Detail 是可选形参（ConfigItem.AddConfiguration 的 detail:），
+                //    **没写就不碰那块文字**（原版自己显示什么就显示什么）——
+                //    正是用户要的"如果没有那就让原版显示"。
+                pb.OnMouseOver.AddListener((UnityAction)(() => ShowRowDescription(text)));
+                pb.OnMouseOut.AddListener((UnityAction)(() => RestoreRowDescription()));
             }
             catch (Exception ex)
             {
@@ -1803,7 +2383,7 @@ namespace Light.UI.Config
                     if (headerGo != null)
                     {
                         headerGo.SetActive(true);
-                        headerGo.transform.localPosition = new Vector3(HeaderX, y, RowZ);
+                        headerGo.transform.localPosition = new Vector3(CurHeaderX, y, RowZ);
                     }
                     y -= HeaderHeight;
 
@@ -1816,7 +2396,7 @@ namespace Light.UI.Config
                         rowGo.SetActive(vis);
                         if (!vis) continue;
 
-                        rowGo.transform.localPosition = new Vector3(RowX, y, RowZ);
+                        rowGo.transform.localPosition = new Vector3(CurRowX, y, RowZ);
                         y -= SpacingY;
                     }
                 }

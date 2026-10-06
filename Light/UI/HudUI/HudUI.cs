@@ -415,12 +415,25 @@ public class MetaScreen : MonoBehaviour
     }
 
     /// <summary>
+    /// 关闭按钮（左上角那个 X）的**默认缩放**。
+    ///
+    /// ⚠️ 2026-10-06 用户连着几轮说"关闭按钮太小"，而我一直在**外面**用
+    ///    `FindDeep("CloseButton")` 改 `localScale` —— **那套从来就没生效过**，两个原因：
+    ///      ① 原来这里是**写死的 0.57**，外面怎么改都会被这里覆盖；
+    ///      ② `HudUIWindow.GameObject` 是 **Screen 那一层**，而 CloseButton 是它的**兄弟**
+    ///         （都挂在 MetaWindow 下）→ 从 `GameObject` 往下找**根本找不到**。
+    ///    → **尺寸就该在这里改**（用户原话："你去动 HudUI 吧"）。
+    ///    所有走 GenerateWindow 的窗口（预设窗口、提示窗口、音乐窗口…）一起生效。
+    /// </summary>
+    public const float DefaultCloseButtonScale = 0.90f;   // 原来是硬编码的 0.57
+
+    /// <summary>
     /// 生成窗口
     /// </summary>
     public static MetaScreen GenerateWindow(Vector2 size, Transform? parent, Vector3 localPos,
         bool withBlackScreen = true, bool closeOnClickOutside = false,
         BackgroundSetting background = BackgroundSetting.Modern, bool withCloseButton = true,
-        int sortingGroupOrder = 100)
+        int sortingGroupOrder = 100, float closeButtonScale = DefaultCloseButtonScale)
     {
         try
         {
@@ -429,12 +442,17 @@ public class MetaScreen : MonoBehaviour
 
             if (withCloseButton)
             {
+                // ⚠️ 位置**不跟着缩放走**（2026-10-06 修：我一度让它按 `closeButtonScale/0.57`
+                //   外移，结果按钮被推到窗口外面很远 —— 用户："太远了"）。
+                //   算一下就知道不用挪：0.57 缩放时按钮半边 = 0.85×0.57/2 = 0.242，
+                //   内边缘在 `-0.3 + 0.242 = -0.058`（正好贴窗口左缘）；放大到 0.90 后半边 = 0.3825，
+                //   用同一个 -0.3，内边缘会稍微压进窗口一点 —— **这正是变大后该有的样子**。
                 if (background == BackgroundSetting.Modern)
                 {
                     // Modern 风格关闭按钮 — 左上角外侧
                     var collider = CreateObject<BoxCollider2D>("CloseButton", obj.transform,
                         new Vector3(-size.x / 2f - 0.3f, size.y / 2f + 0.2f, 0f));
-                    collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);
+                    collider.transform.localScale = new Vector3(closeButtonScale, closeButtonScale, 1f);
                     collider.isTrigger = true;
                     collider.gameObject.layer = LayerExpansion.GetUILayer();
                     collider.size = new Vector2(0.85f, 0.85f);
@@ -452,7 +470,7 @@ public class MetaScreen : MonoBehaviour
                     // Old 风格关闭按钮
                     var collider = CreateObject<BoxCollider2D>("CloseButton", obj.transform,
                         new Vector3(-size.x / 2f - 0.3f, size.y / 2f + 0.2f, 0f));
-                    collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);
+                    collider.transform.localScale = new Vector3(closeButtonScale, closeButtonScale, 1f);
                     collider.isTrigger = true;
                     collider.gameObject.layer = LayerExpansion.GetUILayer();
                     collider.size = new Vector2(0.85f, 0.85f);
@@ -533,7 +551,7 @@ public class MetaScreen : MonoBehaviour
             {
                 var collider = CreateObject<BoxCollider2D>("NavButton", obj.transform,
                     new Vector3(screen.Border.x / 2f + 0.3f - x, screen.Border.y / 2f + 0.25f, 0f));
-                collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);
+                collider.transform.localScale = new Vector3(0.57f, 0.57f, 1f);   // NavButton 不是关闭按钮，保持原样
                 collider.isTrigger = true;
                 collider.gameObject.layer = LayerExpansion.GetUILayer();
                 collider.size = new Vector2(0.65f, 0.65f);
@@ -850,6 +868,33 @@ public class HudUIButton
     }
 
     /// <summary>
+    /// **覆盖"选中态"用的贴图**。
+    ///
+    /// 用户 2026-10-06（预设窗口）："这个选中态也太难堪了，你就让他变成类似于
+    /// 鼠标悬停时的样子行不" —— 默认的 <c>_selectedSprite</c>（ButtonSelected）
+    /// 是一整块高亮，用在**卡片列表**里太重；这里允许调用方换成别的
+    /// （预设窗口就换成 <c>ButtonHover</c>，和悬停同一个观感）。
+    ///
+    /// ⚠️ 只影响**这一个按钮实例** —— 不动 <c>HudUIAssets</c>，别的窗口照旧。
+    /// </summary>
+    public void SetSelectedSprite(Sprite? selected, Sprite? selectedHover = null)
+    {
+        try
+        {
+            if (selected != null) _selectedSprite = selected;
+            if (selectedHover != null) _selectedHoverSprite = selectedHover;
+            else if (selected != null) _selectedHoverSprite = selected;
+
+            // 立刻就刷一次，否则要等下一次悬停进出才看得到变化
+            if (_isSelected) Renderer.sprite = _selectedSprite;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[HudUI.SetSelectedSprite]", ex);
+        }
+    }
+
+    /// <summary>
     /// 设置按钮尺寸。传入 null 则恢复为文本自适应（文本 × 1.5）。
     /// </summary>
     public void SetSize(Vector2? size)
@@ -932,8 +977,7 @@ public class HudUIWindow
             Screen = screen;
             GameObject = screen.gameObject;
             _windowSize = windowSize;
-            _currentY = windowSize.y * 0.5f - 0.5f;
-        }
+            _currentY = windowSize.y * 0.5f - 0.5f;        }
         catch (Exception ex)
         {
             LightLogger.LogError("[HudUI.HudUIWindow]", ex);
@@ -943,7 +987,27 @@ public class HudUIWindow
     /// <summary>
     /// 创建窗口
     /// </summary>
-    public static HudUIWindow Create(string title = "", Vector2? size = null, Transform? parent = null)
+    /// <summary>
+    /// 创建窗口。
+    /// </summary>
+    /// <param name="blockInputBehind">
+    /// **是否屏蔽窗口背后的点击**，默认 true。
+    ///
+    /// ⚠️ 为什么必须有这个（2026-10-06 用户："我发现确认框能点到原版的东西，
+    ///    这个也内置到 HudUI 里面作为可选形参吧，默认 true，要不然一直有问题"）：
+    ///
+    ///    原版 <c>PassiveButtonManager</c> 的**点击**判定对**每个碰撞盒重叠的按钮**都会派发 ——
+    ///    它**只对悬停按 z 取最靠前那个**（见 HandleMouseOver 里的 z 比较），
+    ///    点击那一段（Update 里 L58 那个循环）**完全没有 z 判定**。
+    ///
+    ///    → **"窗口盖在上面"根本不等于"拦住了下面的点击"**，
+    ///      黑幕、底板、SortingGroup 全都拦不住。
+    ///      必须**显式把不属于本窗口的原版控件禁用掉**（就是 <see cref="UiModalGuard"/> 干的事）。
+    ///
+    ///    这里把它内置：开窗时 Push + 挂每帧 Sweep 驱动器，关窗时 Pop 还原。
+    /// </param>
+    public static HudUIWindow Create(string title = "", Vector2? size = null, Transform? parent = null,
+        bool blockInputBehind = true)
     {
         try
         {
@@ -955,7 +1019,9 @@ public class HudUIWindow
                 withBlackScreen: true, closeOnClickOutside: false,
                 background: BackgroundSetting.Modern, withCloseButton: true);
 
-            return new HudUIWindow(screen, windowSize);
+            var window = new HudUIWindow(screen, windowSize);
+            if (blockInputBehind) window.EnableInputBlock();
+            return window;
         }
         catch (Exception ex)
         {
@@ -963,7 +1029,70 @@ public class HudUIWindow
         }
     }
 
-    public void Close() => Screen.CloseScreen();
+    /// <summary>
+    /// 关窗。⚠️ 走这里关会**顺带还原被屏蔽的点击**；
+    ///    直接点右上角 X（MetaScreen 内部是 `Object.Destroy(obj)`）不会走这里 ——
+    ///    但 <see cref="UiModalGuard"/> 每帧会检查根节点是否还活着，销毁后会自动清理并还原 ✓
+    /// </summary>
+    public void Close()
+    {
+        DisableInputBlock();
+        Screen.CloseScreen();
+    }
+
+    // =====================================================================
+    //  输入屏蔽（"能点到背后的原版控件"的通用解法）
+    // =====================================================================
+
+    /// <summary>已登记的屏蔽根（= MetaWindow，不是 Screen）。null = 没开屏蔽。</summary>
+    private Transform? _blockRoot;
+
+    /// <summary>是否已经开了输入屏蔽。</summary>
+    public bool InputBlocked => _blockRoot != null;
+
+    /// <summary>
+    /// 开输入屏蔽：**把不属于本窗口的原版控件临时禁用**，并挂一个每帧 Sweep 驱动器。
+    ///
+    /// ⚠️ 屏蔽根取 <c>Screen.transform.parent</c>（MetaWindow）而不是 <c>Screen.transform</c> ——
+    ///    因为**关闭按钮 X 是 MetaWindow 的子物体、Screen 的兄弟**：
+    ///    用 Screen 当根的话，连我们自己的 X 都会被判成"不属于本窗口"而禁掉，窗口就关不掉了。
+    /// </summary>
+    public void EnableInputBlock()
+    {
+        try
+        {
+            if (_blockRoot != null) return;
+
+            _blockRoot = Screen != null ? Screen.transform.parent : null;
+            if (_blockRoot == null) { LightLogger.LogWarning("[HudUIWindow] 拿不到屏蔽根，输入屏蔽未生效"); return; }
+
+            UiModalGuard.Push(_blockRoot);
+
+            // 挂每帧驱动器 —— UiModalGuard.Sweep 必须每帧跑，否则只是算了一次
+            if (GameObject != null) GameObject.AddComponent<HudUIInputGuard>();
+
+            LightLogger.Log($"[HudUIWindow] 已开启输入屏蔽（根={_blockRoot.name}）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[HudUIWindow.EnableInputBlock]", ex);
+        }
+    }
+
+    /// <summary>关掉输入屏蔽并还原被禁用的原版控件。</summary>
+    public void DisableInputBlock()
+    {
+        try
+        {
+            if (_blockRoot == null) return;
+            UiModalGuard.Pop(_blockRoot);
+            _blockRoot = null;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[HudUIWindow.DisableInputBlock] {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// 把这个窗口里**所有**文字换成本模组的"简中字体模板"字体。
@@ -1095,4 +1224,275 @@ public class HudUIWindow
     }
 
     public void AddMargin(float height) => _currentY -= height;
+
+    /// <summary>
+    /// <see cref="HudUIWindow.EnableInputBlock"/> 的每帧驱动器。
+    ///
+    /// ⚠️ `UiModalGuard` 只负责**算出该禁用哪些控件**，真正干活的是每帧调用的 `Sweep()`。
+    ///    主菜单那边由 `MainMenuPatch`（**只在 MainMenu 场景**）驱动，
+    ///    大厅/设置界面**没有别人驱动** → 不挂这个的话屏蔽等于没开。
+    ///
+    /// ⚠️ 托管 MonoBehaviour 必须先 <c>ClassInjector.RegisterTypeInIl2Cpp&lt;T&gt;()</c>，
+    ///    否则 <c>AddComponent&lt;T&gt;()</c> 抛 TypeInitializationException（AGENTS.md §11.2）。
+    /// </summary>
+    public sealed class HudUIInputGuard : MonoBehaviour
+    {
+        static HudUIInputGuard()
+        {
+            try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<HudUIInputGuard>(); }
+            catch { }
+        }
+
+        /// <summary>每 N 帧强制全扫一次 —— Sweep 内部有"Buttons 数量没变就短路"的优化，
+        /// 而原版会自己把按钮 enabled 回来，所以要低频兜底。</summary>
+        private const int ForceSweepEvery = 20;
+
+        private int _tick;
+
+        private void Update()
+        {
+            try { UiModalGuard.Sweep(); } catch { }
+
+            if (++_tick >= ForceSweepEvery)
+            {
+                _tick = 0;
+                try { UiModalGuard.ForceSweep(); } catch { }
+            }
+        }
+    }
+}
+
+// =====================================================================
+// HudUIInputField — 通用输入框（2026-10-06 新增）
+//
+// 用户："保存需要俩输入框。这俩输入框怎么说呢，HudUI 那个不好使，
+//       你修一下 HudUI 的拿来用吧。"
+//
+// ⚠️ 之前是在 PresetWindow 里临时克隆原版 EnterCodeField，实测四个坑全踩：
+//    ① **占位符"输入代码"一直挂着** —— 原版 TextBoxTMP 自带 placeholderText 子物体；
+//    ② **整个框看不见** —— 原版那个 Background 在克隆体上是 null / 尺寸为 0；
+//    ③ **什么都输不进去** —— 原版只允许房间码字符（allowAllCharacters = false）；
+//    ④ **回车会触发"加入房间"** —— 克隆体自带 OnEnter 回调（§4.5 同一类坑）。
+//    现在统一在这里修好，外面直接用。
+// =====================================================================
+
+/// <summary>
+/// HudUI 的通用输入框（包装原版 <see cref="TextBoxTMP"/>）。
+/// 用 <see cref="Create"/> 建，别自己 new。
+/// </summary>
+public class HudUIInputField
+{
+    public GameObject GameObject { get; private set; }
+    public TextBoxTMP? Box { get; private set; }
+
+    private TextMeshPro? _placeholder;
+    private SpriteRenderer? _bg;
+
+    private HudUIInputField(GameObject go, TextBoxTMP? box)
+    {
+        GameObject = go;
+        Box = box;
+    }
+
+    /// <summary>当前文本。</summary>
+    public string Text => Box != null ? (Box.text ?? "") : "";
+
+    public void SetText(string text)
+    {
+        try
+        {
+            if (Box == null) return;
+            Box.SetText(text ?? "");
+            RefreshPlaceholder();
+        }
+        catch (Exception ex) { LightLogger.LogWarning($"[HudUIInputField.SetText] {ex.Message}"); }
+    }
+
+    public void SetPosition(Vector3 localPos)
+    {
+        try { if (GameObject != null) GameObject.transform.localPosition = localPos; } catch { }
+    }
+
+    public void SetActive(bool on)
+    {
+        try { if (GameObject != null) GameObject.SetActive(on); } catch { }
+    }
+
+    /// <summary>主动聚焦（弹出软键盘 —— PC 上没用，但手柄/触屏有用）。</summary>
+    public void Focus()
+    {
+        try { Box?.GiveFocus(); } catch { }
+    }
+
+    /// <summary>按当前文本决定占位符显不显示。</summary>
+    private void RefreshPlaceholder()
+    {
+        try
+        {
+            if (_placeholder == null) return;
+            bool empty = string.IsNullOrEmpty(Text);
+            _placeholder.gameObject.SetActive(empty);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 建一个输入框。
+    /// </summary>
+    /// <param name="parent">挂哪。</param>
+    /// <param name="size">外框尺寸（宽 × 高，世界单位）。</param>
+    /// <param name="placeholder">空的时候显示的灰字提示。</param>
+    /// <param name="characterLimit">最大字符数（&lt;=0 = 不限）。</param>
+    public static HudUIInputField Create(Transform parent, Vector2 size,
+        string placeholder = "", int characterLimit = 24)
+    {
+        var go = new GameObject("HudUIInput");
+        go.layer = LayerExpansion.GetUILayer();
+        go.transform.SetParent(parent, false);
+        go.transform.localPosition = Vector3.zero;
+        go.transform.localScale = Vector3.one;
+
+        var field = new HudUIInputField(go, null);
+
+        try
+        {
+            // ① 底框：**自己画**（原版那个 Background 在克隆体上不可靠，见类注释 ②）
+            var bg = go.AddComponent<SpriteRenderer>();
+            bg.sprite = HudUIAssets.ButtonNormal;
+            bg.drawMode = SpriteDrawMode.Sliced;
+            bg.size = size;
+            field._bg = bg;
+
+            // ② 克隆一个原版 TextBoxTMP 当输入核心
+            var tpl = FindTextBoxTemplate();
+            if (tpl == null)
+            {
+                LightLogger.LogWarning("[HudUIInputField] 找不到可克隆的 TextBoxTMP，输入框不可用");
+                return field;
+            }
+
+            var box = Object.Instantiate(tpl, go.transform);
+            box.gameObject.name = "InputCore";
+            box.gameObject.SetActive(true);
+            box.transform.localPosition = new Vector3(0f, 0f, -0.1f);
+            box.transform.localScale = Vector3.one;
+            field.Box = box;
+
+            // ③ 输入规则：**必须放开**，否则只能输房间码那几个字符（坑 ③）
+            box.allowAllCharacters = true;
+            box.AllowSymbols = true;
+            box.AllowPaste = true;
+            box.ForceUppercase = false;
+            box.ClearOnFocus = false;
+            box.ClearOnlyPlaceholderOnFocus = true;
+            box.characterLimit = characterLimit;
+
+            // ④ 清掉原版自带的行为与占位符（坑 ① ④）
+            box.OnEnter = new UnityEngine.UI.Button.ButtonClickedEvent();   // 否则回车=加入房间
+            box.OnChange ??= new UnityEngine.UI.Button.ButtonClickedEvent();
+            box.OnChange.AddListener((UnityAction)(() => field.RefreshPlaceholder()));
+            ClearVanillaPlaceholder(box);
+
+            // ⑤ 尺寸/字体：原版那个是给 6 位房间码用的，小得很
+            if (box.Background != null)
+            {
+                box.Background.drawMode = SpriteDrawMode.Sliced;
+                box.Background.size = new Vector2(size.x - 0.12f, size.y - 0.12f);
+            }
+
+            if (box.outputText != null)
+            {
+                var tmp = box.outputText;
+                tmp.enableAutoSizing = false;          // §12.2：不关掉字号完全不生效
+                tmp.fontSize = 1.55f;
+                tmp.fontSizeMin = 1.55f;
+                tmp.fontSizeMax = 1.55f;
+                tmp.fontStyle = FontStyles.Bold;       // §12.1
+                tmp.alignment = TextAlignmentOptions.Left;
+                tmp.enableWordWrapping = false;
+                tmp.overflowMode = TextOverflowModes.Ellipsis;
+                tmp.rectTransform.sizeDelta = new Vector2(size.x - 0.30f, size.y - 0.16f);
+                tmp.rectTransform.localPosition = new Vector3(0f, 0f, -0.05f);
+            }
+
+            // ⑥ 我们自己的占位符（原版那个已经被清掉了）
+            if (!string.IsNullOrEmpty(placeholder))
+            {
+                var ph = HudUITextHelper.Create(go.transform);
+                if (ph != null)
+                {
+                    ph.text = placeholder;
+                    ph.enableAutoSizing = false;
+                    ph.fontSize = 1.45f;
+                    ph.fontSizeMin = 1.45f;
+                    ph.fontSizeMax = 1.45f;
+                    ph.fontStyle = FontStyles.Bold;
+                    ph.alignment = TextAlignmentOptions.Left;
+                    ph.color = new UnityEngine.Color(1f, 1f, 1f, 0.45f);   // 全限定：本文件 Color 会撞 LightInDark.Color
+                    ph.rectTransform.sizeDelta = new Vector2(size.x - 0.30f, size.y - 0.16f);
+                    ph.rectTransform.localPosition = new Vector3(-0.02f, 0f, -0.15f);
+                    field._placeholder = ph;
+                }
+            }
+
+            field.SetText("");
+            LightLogger.Log($"[HudUIInputField] 输入框已建（{size.x}×{size.y}，上限 {characterLimit} 字）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[HudUIInputField.Create]", ex);
+        }
+
+        return field;
+    }
+
+    /// <summary>把原版那个"输入代码"占位符清掉（它是 TextBoxTMP 的子物体）。</summary>
+    private static void ClearVanillaPlaceholder(TextBoxTMP box)
+    {
+        try
+        {
+            var outTmp = box.outputText;
+            foreach (var t in box.GetComponentsInChildren<TextMeshPro>(true))
+            {
+                if (t == null) continue;
+                if (outTmp != null && t.Pointer == outTmp.Pointer) continue;   // 真输出文本，留着
+                t.text = "";
+                t.gameObject.SetActive(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[HudUIInputField.ClearVanillaPlaceholder] {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 找一个原版 TextBoxTMP 当模板。
+    /// ⚠️ 用 <c>FindObjectOfType</c> 而不是 <c>DestroyableSingleton</c> ——
+    ///    后者找不到实例时**会凭空造一个 MainMenuManager 出来**，Awake 里直接 NRE（踩过）。
+    /// </summary>
+    private static TextBoxTMP? FindTextBoxTemplate()
+    {
+        // ① 主界面那个"输房间码"的（entercodeField 是 PassiveButton，真输入框在它子物体上）
+        try
+        {
+            var menu = Object.FindObjectOfType<MainMenuManager>();
+            if (menu != null && menu.entercodeField != null)
+            {
+                var t = menu.entercodeField.GetComponentInChildren<TextBoxTMP>();
+                if (t != null) return t;
+            }
+        }
+        catch { }
+
+        // ② 兜底：已加载资源里任意一个
+        try
+        {
+            var all = Resources.FindObjectsOfTypeAll(Il2CppInterop.Runtime.Il2CppType.Of<TextBoxTMP>());
+            if (all != null && all.Length > 0) return all[0].TryCast<TextBoxTMP>();
+        }
+        catch { }
+
+        return null;
+    }
 }

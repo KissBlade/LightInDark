@@ -51,12 +51,11 @@ public static class LightUtils
                 LightLogger.LogWarning($"[LightUtils.AttachComponent] 挂载 {typeof(T).Name} 失败：{ex.Message}，正在重试...");
                 try
                 {
-                    // 托管 MonoBehaviour 需先注册才能 AddComponent，尝试补注册后重试
                     ClassInjector.RegisterTypeInIl2Cpp<T>();
                 }
                 catch
                 {
-                    // 已是 IL2CPP 类型或已注册，忽略
+
                 }
                 System.Threading.Thread.Sleep(50);
             }

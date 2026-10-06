@@ -63,7 +63,7 @@ public static class GameSettingMenuPatch
         // 左列（Column=0），TONE 的 x=-3.9；从上往下 Row 递增
         ("Preset",       "预设",     0, 0),
         ("GameSettings", "游戏设置", 0, 1),
-        ("Mod",          "MOD",     0, 2),
+        ("Mod",          "模组设置", 0, 2),
         ("Ghost",        "幽灵",     0, 3),
         // 右列（Column=1），TONE 的 x=-2.4
         ("Crewmate",     "船员",     1, 0),
@@ -127,6 +127,101 @@ public static class GameSettingMenuPatch
     {
         "加载预设", "保存预设", "导出预设为TXT文件", "导入预设",
     };
+
+    // =====================================================================
+    //  预设按钮（2026-10-06 重构）
+    //
+    //  之前这 4 个按钮的 OnClick 是 `/* 本轮无效果 */` —— 只有 UI、没有逻辑。
+    //  现在接上 LightInDark.Configuration.PresetStore / PresetCodec：
+    //    · 配置项一改，PresetStore 就异步写 <persistentDataPath>/LightInDark/Preset/Current.lidpreset
+    //    · 这四个按钮操作的是那一套（Current = 当前配置；Save/ = 具名预设，后续接）
+    // =====================================================================
+
+    private const int PresetLoad = 0;
+    private const int PresetSave = 1;
+    private const int PresetExport = 2;
+    private const int PresetImport = 3;
+
+    /// <summary>预设页 4 个按钮的点击。</summary>
+    private static void OnPresetButton(int index)
+    {
+        try
+        {
+            switch (index)
+            {
+                case PresetLoad:
+                    // ★ 打开**预设窗口**（用户设计图那个二级窗口）：
+                    //   左侧可搜索的预设列表 + 右侧详情 + 加载/删除。
+                    //   再点一次同一个按钮 = 关掉（Toggle）。
+                    Light.UI.Config.PresetWindow.Toggle();
+                    break;
+
+                case PresetSave:
+                    // ★ 打开**保存窗口**（预设名 / 作者两个输入框 + 保存/取消）。
+                    //   ⚠️ 先关掉预设窗口 —— 三个窗口叠一起点击关系会很难理
+                    //     （而且预设窗口自己会屏蔽输入，会把保存窗口的输入框一起挡掉）。
+                    Light.UI.Config.PresetWindow.Close();
+                    Light.UI.Config.PresetSaveWindow.Open();
+                    break;
+
+                case PresetExport:
+                    // 导出**给人看的 TXT**：弹 Windows 自带的保存框选位置（用户要求）。
+                    //   ⚠️ 这个对话框是模态的，会阻塞主线程直到用户关掉 —— 只在这里调，别放每帧。
+                    {
+                        var path = LightInDark.Configuration.FileDialog.Save(
+                            "导出预设为 TXT",
+                            LightInDark.Configuration.FileDialog.TxtFilter,
+                            "txt",
+                            defaultName: "LID预设.txt",
+                            initialDir: LightInDark.Configuration.FileDialog.DefaultDir());
+
+                        if (path == null) { ShowPresetToast("已取消导出", ""); break; }
+
+                        var (ok, msg) = LightInDark.Configuration.PresetLibrary.ExportTxt(path, "");
+                        ShowPresetToast(ok ? "已导出 TXT" : "导出失败", msg);
+                    }
+                    break;
+
+                case PresetImport:
+                    // 导入：弹 Windows 自带的打开框选 .lidpreset（用户要求）
+                    {
+                        var path = LightInDark.Configuration.FileDialog.Open(
+                            "选择要导入的预设 (.lidpreset)",
+                            LightInDark.Configuration.FileDialog.PresetFilter,
+                            LightInDark.Configuration.PresetStore.SaveDir);
+
+                        if (path == null) { ShowPresetToast("已取消导入", ""); break; }
+
+                        var (ok, msg) = LightInDark.Configuration.PresetStore.LoadFrom(path);
+                        ShowPresetToast(ok ? "已导入" : "导入失败", msg);
+                    }
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogError("[GameSettingMenuPatch.OnPresetButton]", ex);
+        }
+    }
+
+    /// <summary>预设操作的结果提示 —— 走原版左上角那块描述文字（和配置项悬停同一块）。</summary>
+    private static void ShowPresetToast(string title, string detail)
+    {
+        try
+        {
+            var menu = GameSettingMenu.Instance;
+            var tmp = menu != null ? menu.MenuDescriptionText : null;
+            if (tmp == null) { LightLogger.Log($"[预设] {title}：{detail}"); return; }
+
+            tmp.SetText($"{title}\n{detail}");
+            tmp.fontStyle = FontStyles.Bold;
+            tmp.ForceMeshUpdate();
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.ShowPresetToast] {ex.Message}");
+        }
+    }
 
     // =====================================================================
     //  美术资源槽位
@@ -229,10 +324,20 @@ public static class GameSettingMenuPatch
     /// <summary>原版 3 个按钮被挪去的远处坐标（不销毁，避免删组件出 bug）。</summary>
     private static readonly Vector3 VanillaButtonsParkPosition = new(0f, -100f, 0f);
 
-    private const float PresetWidth = 1.5f;
-    private const float PresetHeight = 0.75f;
-    private const float PresetSpacingX = 1.7f;
-    private const float PresetSpacingY = 1.0f;
+    // ⚠️ 2026-10-06 放大（用户："这个碰撞箱也太'小气'了，按我画的来，
+    //    文字放下面小框，放大一点点"）—— 按截图上的红框量的，约 2.33 × 1.42。
+    private const float PresetWidth = 2.30f;      // 1.5 → 2.30
+    private const float PresetHeight = 1.40f;     // 0.75 → 1.40
+
+    /// <summary>
+    /// 图片**下方那条文字**占的高度。
+    /// 点击区 = <c>PresetWidth × (PresetHeight + PresetTextStrip)</c> ——
+    /// **把文字也盖进去**，不然"文字露在点击区外面"，看着像能点其实点不到（用户要的"文字放下面小框"）。
+    /// </summary>
+    private const float PresetTextStrip = 0.55f;
+
+    private const float PresetSpacingX = 2.55f;    // 1.7 → 2.55（按钮变宽了，间距必须跟着涨，否则会叠）
+    private const float PresetSpacingY = 2.10f;    // 1.0 → 2.10
 
     // ---- 运行时引用 ----
     private static GameObject? _presetsPage;
@@ -522,8 +627,10 @@ public static class GameSettingMenuPatch
 
         var go = NewUIObject($"LightPresetButton_{label}", parent, new Vector3(pos.x, pos.y, 0f));
 
-        // 图片槽位（空图时给一块暗色底，便于看到按钮范围）
-        var img = NewUIObject("Image", go.transform, new Vector3(0f, 0f, 0f));
+        // 图片槽位。
+        //   ⚠️ 往上抬 `PresetTextStrip/2`，让"图片 + 下方文字"整体**居中于点击区**
+        //      （点击区是以 go 为中心、高 PresetHeight + PresetTextStrip 的整块）。
+        var img = NewUIObject("Image", go.transform, new Vector3(0f, PresetTextStrip * 0.5f, 0f));
         var imgSr = img.AddComponent<SpriteRenderer>();
         imgSr.sprite = normal;                                   // 资源未提供 → null
         imgSr.drawMode = SpriteDrawMode.Sliced;
@@ -533,15 +640,30 @@ public static class GameSettingMenuPatch
             : new UColor(0.15f, 0.15f, 0.15f, 0.8f);
 
         // 下方文字：走统一模板（与主界面"本地/在线"卡片同字体 + 辉光白）
-        // 有图时文字压在图片下缘内，省出纵向空间；无图时维持原留白。
-        float textY = normal != null ? -PresetHeight * 0.5f + 0.18f : -PresetHeight * 0.5f - 0.2f;
-        MenuTextTemplate.Create(go.transform, new Vector3(0f, textY, -0.1f), label, 1.1f);
+        // 有图时文字压在图片下缘内，省出纵向空间；无图时也贴着图片下缘（都在点击区里）
+        float textY = -PresetHeight * 0.5f + PresetTextStrip * 0.5f - 0.16f;
+        {
+            var tabTmp = MenuTextTemplate.Create(go.transform, new Vector3(0f, textY, -0.1f), label, 1.1f);
+            // 用户 2026-10-06：页签文字也要 Bold（AGENTS.md §12.1）
+            if (tabTmp != null)
+            {
+                tabTmp.fontStyle = FontStyles.Bold;
+                tabTmp.ForceMeshUpdate();
+            }
+        }
 
         // 点击区域 + PassiveButton
-        AddButtonArea(go, PresetWidth, PresetHeight);
+        AddButtonArea(go, PresetWidth, PresetHeight + PresetTextStrip);
+
+        // ★ 调试：没图的时候把**可点击区域**画出来，方便对位。
+        //   只画在 normal == null（没图）的按钮上；有图了就不会画。
+        if (DebugShowPresetClickArea && normal == null)
+            DrawClickAreaOutline(go.transform, PresetWidth, PresetHeight + PresetTextStrip);
 
         var pb = go.SetUpButton(true, null, null, null, false);
-        pb.OnClick.AddListener((UnityAction)(() => { /* 本轮无效果 */ }));
+        // ⚠️ `go` 是我们自己 new 的，不是原版克隆体，所以这里 **AddListener 就够**，
+        //    不需要像克隆行那样先 `OnClick = new(...)` 清空（§4.5 针对的是克隆控件）。
+        pb.OnClick.AddListener((UnityAction)(() => OnPresetButton(index)));
         pb.OnMouseOver.AddListener((UnityAction)(() =>
         {
             if (hover != null) imgSr.sprite = hover;
@@ -550,6 +672,80 @@ public static class GameSettingMenuPatch
         {
             if (normal != null) imgSr.sprite = normal;
         }));
+    }
+
+    // ---------------------------------------------------------------------
+    //  预设按钮"可点击区域"调试描边（用户 2026-10-06 要的临时功能）
+    //
+    //  用途：那 4 张按钮图还没画，按钮只有一块暗色底 + 文字，
+    //        看不出**鼠标到底该点哪里**。这里把真正的点击范围用亮线画出来。
+    //  关掉：改成 false（或以后有图了这条分支自然就不会走 —— 只画 normal == null 的）。
+    // ---------------------------------------------------------------------
+
+    /// <summary>是否给"没图的"预设按钮画可点击区域描边。<b>纯调试用，出厂应设 false。</b></summary>
+    private const bool DebugShowPresetClickArea = true;
+
+    /// <summary>描边颜色（随便挑的洋红，最显眼）。</summary>
+    private static readonly UColor DebugClickAreaColor = new(1f, 0f, 1f, 0.95f);
+
+    /// <summary>描边线宽（世界单位）。</summary>
+    private const float DebugClickAreaThickness = 0.035f;
+
+    /// <summary>自建的 1×1 白图 —— ⚠️ 必须自己持有引用并打 DontUnloadUnusedAsset（§4.6）。</summary>
+    private static Sprite? _dbgWhite;
+
+    private static Sprite? GetDbgWhite()
+    {
+        // ⚠️ 用 `!= null` 而不是 `??` —— Unity 的假 null 识别不了（§4.6.1）
+        if (_dbgWhite != null) return _dbgWhite;
+
+        try
+        {
+            var tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            tex.SetPixel(0, 0, UColor.white);
+            tex.Apply();
+            tex.hideFlags = HideFlags.DontUnloadUnusedAsset;
+
+            _dbgWhite = Sprite.Create(tex, new Rect(0f, 0f, 1f, 1f), new Vector2(0.5f, 0.5f), 100f);
+            _dbgWhite.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.GetDbgWhite] {ex.Message}");
+        }
+        return _dbgWhite;
+    }
+
+    /// <summary>在 parent 下画一个 w×h 的矩形描边（四条细长条，铺在内容之上 z 更小）。</summary>
+    private static void DrawClickAreaOutline(Transform parent, float w, float h)
+    {
+        try
+        {
+            const float z = -0.3f;      // 同容器内 z 越小越靠前 → 盖在暗色底和文字之上
+            float t = DebugClickAreaThickness;
+            float hw = w * 0.5f, hh = h * 0.5f;
+
+            DbgBar(parent, "DbgClickTop", new Vector3(0f, hh, z), new Vector2(w + t, t));
+            DbgBar(parent, "DbgClickBottom", new Vector3(0f, -hh, z), new Vector2(w + t, t));
+            DbgBar(parent, "DbgClickLeft", new Vector3(-hw, 0f, z), new Vector2(t, h + t));
+            DbgBar(parent, "DbgClickRight", new Vector3(hw, 0f, z), new Vector2(t, h + t));
+
+            LightLogger.Log($"[预设调试] 已画出可点击区域描边 {w}×{h}（{parent.name}）");
+        }
+        catch (Exception ex)
+        {
+            LightLogger.LogWarning($"[GameSettingMenuPatch.DrawClickAreaOutline] {ex.Message}");
+        }
+    }
+
+    private static void DbgBar(Transform parent, string name, Vector3 pos, Vector2 size)
+    {
+        var go = NewUIObject(name, parent, pos);
+        var sr = go.AddComponent<SpriteRenderer>();
+        sr.sprite = GetDbgWhite();
+        sr.drawMode = SpriteDrawMode.Sliced;
+        sr.size = size;
+        sr.color = DebugClickAreaColor;
     }
 
     // ---------------------------------------------------------------------
@@ -651,11 +847,19 @@ public static class GameSettingMenuPatch
                     var tr = label.GetComponent<TextTranslatorTMP>();
                     if (tr != null) tr.enabled = false;
 
-                    var menuFont = MenuTextTemplate.MenuFont;
-                    if (menuFont != null) label.font = menuFont;
+                    // ⚠️⚠️ 字体换成 **NotoSansSC**（= 职业配置按钮那个字体）。
+                    //     用户 2026-10-06："那几个页签用的字体改成我们职业配置按钮的那个什么 nano 字体"。
+                    //     原来用 `MenuTextTemplate.MenuFont`（主界面卡片字体），不是一套。
+                    //     ⚠️ 换字体**必须同时换材质**（TMP 字形从字体自己的图集材质取），
+                    //        所以走 ApplyFont，不要直接写 label.font（见 AGENTS.md §12.2）。
+                    try { MenuTextTemplate2.ApplyFont(label); } catch { }
 
                     label.text = cn;
-                    label.fontStyle = FontStyles.UpperCase;
+
+                    // ⚠️⚠️ **不要再写 FontStyles.UpperCase** —— 它是**整体替换**字重，
+                    //     会把 Bold 直接冲掉。用户反馈的"加粗我也没看见"就是这个原因。
+                    //     中文也没有大小写，UpperCase 本来就没意义。
+                    label.fontStyle = FontStyles.Bold;
                     label.color = RoleTabTextColor(i);   // 职业页签用其原本的描边色
                     label.outlineWidth = 0.17f;          // 与 ToN 的分类头一致
                 }
@@ -808,7 +1012,11 @@ public static class GameSettingMenuPatch
                 foreach (var ap in gs.GetComponents<AspectPosition>())
                     if (ap != null) ap.enabled = false;
 
-                gs.transform.localPosition = TabBaseLeft;        // TONE: ButtonPositionLeft
+                // ⚠️ 用户 2026-10-06："预设按钮下面有个原版的'游戏设置'，别删他，给他移到屏幕外面。"
+                //    TONE 是把它重定位到 TabBaseLeft（和我们自己的页签同一处）——
+                //    于是它就**藏在我们「预设」页签底下**，用户看到的就是那个。
+                //    这里改成移到屏幕外（AspectPosition 上面已经禁掉了，不会自己跑回来）。
+                gs.transform.localPosition = new Vector3(0f, -200f, 0f);
                 gs.transform.localScale = TabButtonScale;        // TONE: ButtonSize
             }
 
@@ -1267,19 +1475,37 @@ public static class GameSettingMenuPatch
         return false;
     }
 
-    /// <summary>点击职业按钮：隐藏页签行，打开该职业的独立配置页（带返回按钮）。</summary>
+    /// <summary>
+    /// 点击职业按钮：**就地切换页面** —— 把该职业的配置内容嵌进设置菜单中间那块。
+    ///
+    /// ⚠️ 2026-10-06 **推翻了独立浮窗方案**（用户："我们推翻吧，制作组所有人都不愿意。
+    ///    换成嵌入"）。原因是浮窗要做的事太多、和原版菜单的耦合太重：
+    ///      · 行是原版 OptionBehaviour 克隆体，自带 AspectPosition 会把它拽回原版位置；
+    ///      · 窗口还得自己驱动 UiModalGuard 防点击穿透；
+    ///      · 居中/关闭按钮/层级全要自己摆。
+    ///    改回"就地嵌入"之后这些全都不存在 —— 行还铺在原版菜单的滚动容器里，
+    ///    AspectPosition 算出来的**正好**是对的位置，什么都不用管。
+    /// </summary>
     private static void OnRoleSelected(ConfigBlock block)
     {
         Light.UI.Config.RoleListPage.Clear();
-        SetTabButtonsVisible(false);
+
+        // 页签保留（用户要求）—— 不调 SetTabButtonsVisible(false)
+
+        // 就地切换到该职业的配置页（返回按钮由 ConfigUIPanel.AddBackButton 画，
+        // 它现在克隆的是原版 GameSettingMenu.BackButton）。
         Light.UI.Config.ConfigUIPanel.ShowRole(block, _modPage!.transform, OnRolePageBack);
     }
 
-    /// <summary>职业配置页点返回：恢复页签行，回到职业列表。</summary>
+    /// <summary>职业页点返回：回到职业列表（页签一直是显示的，不用恢复）。</summary>
     private static void OnRolePageBack()
     {
         Light.UI.Config.ConfigUIPanel.Clear();
-        SetTabButtonsVisible(true);
+
+        // ⚠️ 把宿主 GameOptionsMenu 重新登记回去（切换页面过程中可能被动过）
+        RegisterHostMenu();
+
+        SetTabButtonsVisible(true);      // 幂等，无害
         ShowTabConfig(_currentTab);
     }
 

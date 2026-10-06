@@ -56,6 +56,15 @@ public partial class LightPlugin : BasePlugin
         {
             StaticLog = Log; // BepInEx日志
 
+            // 职业立绘加载钩子（API 不能引用主插件的 ResourceHelper，所以走委托注入）
+            try
+            {
+                LightInDark.Roles.RoleTemplate.RoleImageLoader =
+                    path => Light.Utilities.ResourceHelper.LoadSprite(
+                        path, LightInDark.Roles.RoleTemplate.RoleImagePPU);
+            }
+            catch { }
+
             try
             {
                 LightLogger.BepInExInfo = m => Log.LogInfo(m);
@@ -83,6 +92,14 @@ public partial class LightPlugin : BasePlugin
             PaletteColorOverride.Apply(); // 我也不知道。
             LoadRole(); // 加载职业
             RoleConfigRegistrar.Register();   // 职业配置块 + 职业专属项
+
+            // 预设：必须在**所有配置块注册完之后**初始化 ——
+            //   Initialize 会把当时已有的项全挂上"变了就异步写 Current.lidpreset"，
+            //   来晚一步就会漏掉前面注册的那些。
+            //   （之后新增的项由 ConfigRegistry.Register → PresetStore.HookItem 兜住。）
+            try { LightInDark.Configuration.PresetStore.Initialize(); }
+            catch (Exception ex) { LightLogger.LogError("[LightPlugin] PresetStore 初始化失败", ex); }
+
             Dispatcher.Initialize(); // 牛逼工具。
 #if !DEBUG
             LightLogger.ClearLog();
