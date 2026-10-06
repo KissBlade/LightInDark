@@ -19,6 +19,7 @@ public static class GameEndPatch
             // 使用模组结束原因（通过 EndGameManager 自定义）。原版 GameOverReason 仅作兜底。
             // 注意：原版 Assembly-CSharp 也有全局 EndGameManager，必须全限定模组类型。
             var modReason = LightInDark.Game.EndGameManager.GetCurrentReason();
+            bool invalid = modReason == LightInDark.Game.GameEndReason.Invalid;
             bool impWin;
             string reasonStr;
             if (modReason != LightInDark.Game.GameEndReason.None)
@@ -32,7 +33,8 @@ public static class GameEndPatch
                 impWin = reason.HasValue && IsImpostorWin(reason.Value);
                 reasonStr = reason?.ToString() ?? "Unknown";
             }
-            bool crewWin = !impWin;
+            bool crewWin = !invalid && !impWin;
+            impWin = !invalid && impWin;
 
             LightPlayerDataManager.CrewmatesWin = crewWin;
             LightPlayerDataManager.ImpostorsWin = impWin;

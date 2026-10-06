@@ -45,6 +45,28 @@ namespace LightInDark.UI.Ability
         /// <summary>冷却完成音效（相对路径 mp3；为空不播放）。TODO: 下一轮实现 mp3 解析。</summary>
         public string CooldownReadySFX = "";
 
+        public ButtonLabelType LabelType = ButtonLabelType.Standard;
+
+        public Func<bool> FlashWhile;
+
+        public Sprite BrokenIcon;
+
+        public Action SubAction;
+
+        public KeyCode SubHotkey = KeyCode.None;
+
+        public bool UseByMouseClick = false;
+
+        public bool IsLeftSide = false;
+
+        public int Priority = 0;
+
+        public bool ArrangedAsKillButton = false;
+
+        public bool OccupiesLine = false;
+
+        public bool ShouldBeInLastLine = false;
+
         /// <summary>解析后的显示文本。</summary>
         public string ResolvedLabel
         {
@@ -68,5 +90,24 @@ namespace LightInDark.UI.Ability
         public RoleButtonConfig SetMaxUses(int value) { MaxUses = value; return this; }
         public RoleButtonConfig SetOnClickSFX(string path) { OnClickSFX = path; return this; }
         public RoleButtonConfig SetCooldownReadySFX(string path) { CooldownReadySFX = path; return this; }
+        public RoleButtonConfig SetLabelType(ButtonLabelType type) { LabelType = type; return this; }
+        public RoleButtonConfig SetFlashWhile(Func<bool> value) { FlashWhile = value; return this; }
+        public RoleButtonConfig SetBrokenIcon(Sprite icon) { BrokenIcon = icon; return this; }
+        public RoleButtonConfig SetSubAction(Action value) { SubAction = value; return this; }
+        public RoleButtonConfig SetSubHotkey(KeyCode key) { SubHotkey = key; return this; }
+        public RoleButtonConfig SetUseByMouseClick(bool value) { UseByMouseClick = value; return this; }
+        public RoleButtonConfig SetLeftSide(bool value) { IsLeftSide = value; return this; }
+        public RoleButtonConfig SetPriority(int value) { Priority = value; return this; }
+        public RoleButtonConfig SetArrangedAsKillButton(bool value) { ArrangedAsKillButton = value; return this; }
+        public RoleButtonConfig SetOccupiesLine(bool value) { OccupiesLine = value; return this; }
+        public RoleButtonConfig SetShouldBeInLastLine(bool value) { ShouldBeInLastLine = value; return this; }
+    }
+
+    public enum ButtonLabelType
+    {
+        Standard,
+        Impostor,
+        Utility,
+        Crewmate,
     }
 }

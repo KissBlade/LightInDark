@@ -1,8 +1,10 @@
 using System;
+using AmongUs.GameOptions;
 using LightInDark.Audio;
 using LightInDark.Core;
 using LightInDark.Game;
 using LightInDark.Roles;
+using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -28,6 +30,19 @@ namespace LightInDark.UI.Ability
         protected bool _inCooldown;
         protected bool _hudActive = true;
         protected int _usesLeft;
+
+        private const float MouseClickRadius = 150f;
+        private const float FlashInterval = 0.9f;
+
+        private SpriteRenderer _flashRenderer;
+        private float _flashAlpha = -1f;
+        private float _nextFlashAt;
+
+        private SpriteRenderer _brokenRenderer;
+        private bool _broken;
+
+        private GameObject _usesIcon;
+        private TextMeshPro _usesIconText;
 
         protected RoleButtonBase(RuntimeRoleTemplate role, Player player, RoleButtonConfig config, Action onClick)
         {
@@ -110,6 +125,8 @@ namespace LightInDark.UI.Ability
                 SfxManager.Warmup(_config.CooldownReadySFX);
 
                 CreateUI();
+                ApplyLabelType();
+                if (_config.Cooldown > 0f) StartCooldown();
             }
             catch (Exception ex)
             {
@@ -137,6 +154,9 @@ namespace LightInDark.UI.Ability
                 UpdateUsability();
                 UpdateCooldownDisplay();
                 UpdateHotkey();
+                UpdateSubHotkey();
+                UpdateMouseClick();
+                UpdateFlash();
             }
             catch (Exception ex)
             {
@@ -230,7 +250,7 @@ namespace LightInDark.UI.Ability
 
         /// <summary>计算应否可用（子类可覆写）。</summary>
         protected virtual bool ShouldBeUsable
-            => _config.CanUse() && !_inCooldown && (!HasLimitedUses || _usesLeft > 0);
+            => !_broken && _config.CanUse() && !_inCooldown && (!HasLimitedUses || _usesLeft > 0);
 
         protected void UpdateUsability()
         {
@@ -249,12 +269,209 @@ namespace LightInDark.UI.Ability
                 HandleClick();
         }
 
+        protected void UpdateSubHotkey()
+        {
+            if (_config.SubHotkey == KeyCode.None || _config.SubAction == null) return;
+            if (_gameObject == null || !_gameObject.activeSelf) return;
+            if (Input.GetKeyDown(_config.SubHotkey))
+                HandleSubClick();
+        }
+
+        protected void UpdateMouseClick()
+        {
+            if (!_config.UseByMouseClick) return;
+            if (_gameObject == null || !_gameObject.activeSelf) return;
+            if (!Input.GetMouseButtonDown(0)) return;
+            if (Minigame.Instance != null) return;
+            if (MeetingHud.Instance != null) return;
+
+            var camera = Camera.main;
+            if (camera == null) return;
+
+            var buttonScreen = camera.WorldToScreenPoint(_gameObject.transform.position);
+            var pointer = (Vector2)Input.mousePosition;
+            if (Vector2.Distance(new Vector2(buttonScreen.x, buttonScreen.y), pointer) > MouseClickRadius) return;
+
+            HandleClick();
+        }
+
+        protected virtual void HandleSubClick()
+        {
+            if (_broken || _inCooldown) return;
+            if (!_config.CanUse()) return;
+            if (HasLimitedUses && _usesLeft <= 0) return;
+
+            PlayOnClickSFX();
+            _config.SubAction?.Invoke();
+        }
+
+        private void ApplyLabelType()
+        {
+            if (_gameObject == null) return;
+            var label = Button?.buttonLabelText;
+            var material = ResolveLabelMaterial(_config.LabelType);
+            if (label != null && material != null) label.SetSharedMaterial(material);
+        }
+
+        private static Material ResolveLabelMaterial(ButtonLabelType type)
+        {
+            switch (type)
+            {
+                case ButtonLabelType.Impostor:
+                    return RoleManager.Instance?.GetRole(RoleTypes.Shapeshifter)?.Ability?.FontMaterial;
+                case ButtonLabelType.Utility:
+                    return ResolveUseButtonMaterial(ImageNames.PolusAdminButton);
+                case ButtonLabelType.Crewmate:
+                    return RoleManager.Instance?.GetRole(RoleTypes.Engineer)?.Ability?.FontMaterial;
+                default:
+                    return ResolveUseButtonMaterial(ImageNames.UseButton);
+            }
+        }
+
+        private static Material ResolveUseButtonMaterial(ImageNames image)
+        {
+            var settings = HudManager.Instance?.UseButton?.fastUseSettings;
+            if (settings == null) return null;
+            return settings[image]?.FontMaterial;
+        }
+
+        public bool IsBroken => _broken;
+
+        public void PlayFlash()
+        {
+            if (_gameObject == null) return;
+            var icon = Button?.graphic;
+            if (icon == null || icon.sprite == null) return;
+
+            try
+            {
+                if (_flashRenderer == null)
+                {
+                    var flash = new GameObject("Flash");
+                    flash.transform.SetParent(_gameObject.transform, false);
+                    flash.layer = _gameObject.layer;
+                    flash.transform.localPosition = new Vector3(0f, 0f, -1f);
+                    _flashRenderer = flash.AddComponent<SpriteRenderer>();
+
+                    var shader = Shader.Find("Sprites/Default");
+                    if (shader != null) _flashRenderer.material = new Material(shader);
+                }
+
+                _flashRenderer.sprite = icon.sprite;
+                _flashRenderer.gameObject.SetActive(true);
+                _flashRenderer.transform.localScale = Vector3.one;
+                _flashRenderer.color = new UnityEngine.Color(1f, 1f, 1f, 1f);
+                _flashAlpha = 1f;
+            }
+            catch { }
+        }
+
+        private void UpdateFlash()
+        {
+            if (_gameObject == null) return;
+
+            if (_config.FlashWhile != null && IsVisible && _config.FlashWhile())
+            {
+                _nextFlashAt -= Time.deltaTime;
+                if (_nextFlashAt <= 0f)
+                {
+                    _nextFlashAt = FlashInterval;
+                    PlayFlash();
+                }
+            }
+            else
+            {
+                _nextFlashAt = 0f;
+            }
+
+            if (_flashRenderer == null || _flashAlpha < 0f) return;
+
+            _flashAlpha -= Time.deltaTime * 1.5f;
+            if (_flashAlpha <= 0f)
+            {
+                _flashAlpha = -1f;
+                _flashRenderer.gameObject.SetActive(false);
+                return;
+            }
+
+            _flashRenderer.color = new UnityEngine.Color(1f, 1f, 1f, _flashAlpha * 0.85f);
+            _flashRenderer.transform.localScale = Vector3.one * (2f - _flashAlpha);
+        }
+
+        public void Break()
+        {
+            if (_broken) return;
+            _broken = true;
+
+            try
+            {
+                if (_gameObject == null) return;
+
+                var icon = Button?.graphic;
+                if (icon != null) icon.enabled = false;
+
+                if (_brokenRenderer == null)
+                {
+                    var broken = new GameObject("Broken");
+                    broken.transform.SetParent(_gameObject.transform, false);
+                    broken.layer = _gameObject.layer;
+                    broken.transform.localPosition = Vector3.zero;
+                    _brokenRenderer = broken.AddComponent<SpriteRenderer>();
+                }
+
+                _brokenRenderer.sprite = _config.BrokenIcon != null
+                    ? _config.BrokenIcon
+                    : icon != null ? icon.sprite : null;
+                _brokenRenderer.color = new UnityEngine.Color(0.32f, 0.32f, 0.32f, 0.85f);
+                _brokenRenderer.gameObject.SetActive(true);
+            }
+            catch { }
+        }
+
+        public void ShowUsesIcon(string text)
+        {
+            try
+            {
+                if (_gameObject == null) return;
+
+                if (_usesIcon == null)
+                {
+                    var source = HudManager.Instance?.AbilityButton?.transform;
+                    if (source == null || source.childCount <= 2) return;
+
+                    var template = source.GetChild(2);
+                    _usesIcon = Object.Instantiate(template.gameObject, _gameObject.transform);
+                    _usesIcon.name = "UsesIcon";
+                    _usesIcon.transform.localScale = template.localScale;
+                    _usesIcon.transform.localPosition = template.localPosition * 1.2f;
+
+                    _usesIconText = _usesIcon.transform.childCount > 0
+                        ? _usesIcon.transform.GetChild(0).GetComponent<TextMeshPro>()
+                        : null;
+                }
+
+                _usesIcon.SetActive(true);
+                UpdateUsesIcon(text);
+            }
+            catch { }
+        }
+
+        public void UpdateUsesIcon(string text)
+        {
+            if (_usesIconText != null) _usesIconText.SetText(text);
+        }
+
+        public void HideUsesIcon()
+        {
+            if (_usesIcon != null) _usesIcon.SetActive(false);
+        }
+
         /// <summary>点击入口（子类可覆写；默认：SFX → 回调 → 扣次数 → 冷却）。</summary>
         protected virtual void HandleClick()
         {
             try
             {
-                if (_inCooldown) return;
+                if (_broken || _inCooldown) return;
                 if (!_config.CanUse()) return;
                 if (HasLimitedUses && _usesLeft <= 0) return;
 

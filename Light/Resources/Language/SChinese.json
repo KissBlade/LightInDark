@@ -92,5 +92,6 @@
   "role.impostor.name": "内鬼",
   "role.impostor.shortdes": "击杀船员或完成破坏",
   "role.impostor.des": "击杀船员、破坏设施、钻管道。",
-  "role.impostor.intro": "暗中潜伏，伺机而动。"
+  "role.impostor.intro": "暗中潜伏，伺机而动。",
+  "gameEnd.invalid": "无效游戏，无人胜利"
 }

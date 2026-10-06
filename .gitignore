@@ -32,6 +32,7 @@ bld/
 [Oo]ut/
 Output/
 Light/Output/
+Libs/LightInDark.dll
 [Ll]og/
 [Ll]ogs/
 Nebula/obj/
