@@ -28,12 +28,12 @@ public class ChatControlPatch
         {
             string text = ChatCommands.PatchManager.HistoryManager.MoveUp();
             if (text != null)
-                __instance.freeChatField.textArea.SetText(text);
+                __instance.freeChatField.textArea.SetText(Sanitize(text));
         }
         else if (Input.GetKeyDown(KeyCode.DownArrow) && ChatCommands.PatchManager.HistoryManager.Count > 0)
         {
             string text = ChatCommands.PatchManager.HistoryManager.MoveDown();
-            __instance.freeChatField.textArea.SetText(text ?? "");
+            __instance.freeChatField.textArea.SetText(Sanitize(text ?? ""));
         }
         if(Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
         {
@@ -56,7 +56,22 @@ public class ChatControlPatch
                 ChatCommands.PatchManager.SendLocalMessage(Language.Translate(key: "April.joke1", fallback: "Happy birthday to you!"));
             }
         }
-        
+    }
+
+    /// <summary>
+    /// 清洗历史文本：去掉会让「删字留下孤立代理 / 零宽字符」的坏字符。
+    /// （历史可能来自旧版本、粘贴或其它玩家，而 SetText 不走输入校验，必须自己挡。）
+    /// </summary>
+    private static string Sanitize(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text ?? "";
+        var sb = new StringBuilder(text.Length);
+        foreach (char c in text)
+        {
+            if (char.IsSurrogate(c) || char.IsControl(c) || c == '\uFEFF') continue;
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 }
 [HarmonyPatch(typeof(FreeChatInputField), nameof(FreeChatInputField.UpdateCharCount))]
