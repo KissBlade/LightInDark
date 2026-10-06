@@ -158,12 +158,30 @@ namespace LightInDark.RPCs
         {
             try
             {
-                PlayerControl.LocalPlayer?.RpcStartMeeting(null);
+                var local = PlayerControl.LocalPlayer;
+                if (local == null) return;
+                if (MeetingHud.Instance != null) return;
+                if (AmongUsClient.Instance == null || !AmongUsClient.Instance.AmHost) return;
+
+                MeetingRoomManager.Instance.AssignSelf(local, null);
+                HudManager.Instance.OpenMeetingRoom(local);
+                local.RpcStartMeeting(null);
             }
             catch (Exception ex)
             {
                 LightLogger.LogError("RpcDefinitions.RpcStartMeeting", ex);
             }
+        }
+
+        [LidRPC]
+        public static void ForceEndGameInvalid()
+        {
+            LightInDark.Game.EndGameManager.MarkInvalid();
+
+            var client = AmongUsClient.Instance;
+            if (client == null || !client.AmHost) return;
+
+            LightInDark.Game.EndGameManager.TryEndGame(LightInDark.Game.GameEndReason.Invalid);
         }
 
         [LidRPC(OnlyHost = true)]

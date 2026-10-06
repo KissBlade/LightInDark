@@ -75,7 +75,23 @@ namespace LightInDark.UI.Ability
             if (HasLimitedUses) _actionButton.SetUsesRemaining(_usesLeft);
             else _actionButton.SetInfiniteUses();
 
+            AttachToGrid();
+
             _gameObject.SetActive(false);
+        }
+
+        private void AttachToGrid()
+        {
+            if (_gameObject == null) return;
+            var grid = HudGrid.Ensure();
+            var content = new HudContent(_gameObject);
+            content.SetPriority(_config.Priority);
+            content.MarkAsKillButtonContent(_config.ArrangedAsKillButton);
+            content.IsStaticContent = _config.AlwaysShow;
+            content.OccupiesLine = _config.OccupiesLine;
+            content.ShouldBeInLastLine = _config.ShouldBeInLastLine;
+            content.ActiveFunc = () => _gameObject != null && _gameObject.activeSelf;
+            if (grid != null) grid.RegisterContent(content, _config.IsLeftSide);
         }
 
         protected void ApplyConfig()
