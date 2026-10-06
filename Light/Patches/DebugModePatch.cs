@@ -41,6 +41,8 @@ namespace Light.Patches
         {
             try
             {
+                if (LightInDark.Game.EndGameManager.ConsumeForceEnd()) return true;
+
                 if (!DebugMode.Enabled) return true;      // 未开调试 → 原版行为
 
                 // 调试模式：压住"该检查结束了"的标志，并把结束请求吞掉

@@ -273,6 +273,12 @@ namespace LightInDark.Audio
             _host = go.AddComponent<SfxHost>();
         }
 
-        private sealed class SfxHost : MonoBehaviour { }
+        private sealed class SfxHost : MonoBehaviour
+        {
+            static SfxHost()
+            {
+                Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<SfxHost>();
+            }
+        }
     }
 }

@@ -91,5 +91,6 @@
   "role.impostor.name": "Impostor",
   "role.impostor.shortdes": "Kill crewmates or sabotage",
   "role.impostor.des": "Kill crewmates, sabotage, and use vents.",
-  "role.impostor.intro": "Hide in the dark, strike when ready."
+  "role.impostor.intro": "Hide in the dark, strike when ready.",
+  "gameEnd.invalid": "Invalid Game, No Winner"
 }

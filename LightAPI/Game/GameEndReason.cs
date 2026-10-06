@@ -31,6 +31,8 @@ namespace LightInDark.Game
         /// <summary>船员断线/离开获胜</summary>
         CrewmatesByDisconnect = 7,
 
+        Invalid = 8,
+
         // ---- 模组扩展结束原因（自定义）----
 
         /// <summary>第三方/自定义原因占位起始值以外，自定义结束时使用高位值。</summary>
