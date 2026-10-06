@@ -3,57 +3,17 @@ using HarmonyLib;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.Rendering;          // SortingGroup
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 using LightInDark.Core;
 using Light.UI.HudUI;
 using Object = UnityEngine.Object;
 
 namespace Light.Patches;
-
-/// <summary>
-/// **聊天框富文本 / emoji 支持**（用户 2026-10-06 需求）。
-///
-/// ═══════════════════════════════════════════════════════════════════════
-///  用户原话：
-///   · "渲染了，但是发出去后被剥离了。能不能做一下这个，聊天框里不渲染，
-///      发出去后会渲染，这样方便看"
-///   · "如果包含了 Rich 标签，那么克隆个发送按钮到我画的地方，叫 预览，
-///      点击后打开一个窗口，可以看到渲染后文字"
-///   · "发出去是豆腐块，你也看见了"
-///
-///  【这里做了什么】
-///   ① **输入框不渲染** —— 把 `textArea.outputText.richText` 关掉，
-///      这样输入时看到的是**原始标签**（`&lt;color=red&gt;你好&lt;/color&gt;`），方便检查有没有写错。
-///      （之前是渲染的，标签一多就看不清自己到底打了什么。）
-///   ② **克隆一个「预览」按钮**放在发送按钮左边，点开一个小窗口，
-///      用 `<c>richText = true</c>` 的 TMP **渲染**当前输入内容 —— 发之前先看效果。
-///
-///  ⚠️ **没做的 / 做不到的**（说清楚，别让用户以为全好了）：
-///   · **"发出去后渲染"** —— 游戏在发送前会把标签剥掉，那一段在 `ChatController`
-///     的发送链路里，本轮**没找到确切的剥离点**，所以没动。
-///   · **豆腐块** —— emoji 字形问题，见 `RichTextInputPatch.SetupEmojiFallback`。
-///     那个是"字体里没有字形"，跟本文件无关。
-/// ═══════════════════════════════════════════════════════════════════════
 public static class ChatRichTextPatch
 {
     /// <summary>克隆出来的预览按钮，避免重复建。</summary>
     private static GameObject? _previewButton;
-
-    // =====================================================================
-    //  让**发出去的**消息真的渲染富文本
-    //
-    //  用户 2026-10-06："发送出去时 Rich 文本没出现，我说 TONE 我记得可以，你去看看。"
-    //
-    //  看 TONE 的结果（`ChatCommandPatch.cs:2805`）—— **关键就一行**：
-    //      chatBubble.TextArea.overrideColorTags = false;
-    //
-    //  TMP 的 `overrideColorTags` 打开时会**忽略文本里的 <color=...> 标签，
-    //  强制用物体自己的颜色** —— 标签被解析掉、但颜色不生效，
-    //  看起来就是"发出去之后标签被剥离了"（用户的原话）✓
-    //
-    //  同时补 richText = true 双保险（TMP 默认开，但原版可能在预制体里关掉过）。
-    // =====================================================================
 
     [HarmonyPatch(typeof(ChatBubble), nameof(ChatBubble.SetName))]
     public static class ChatBubbleRichTextPatch
@@ -67,8 +27,8 @@ public static class ChatRichTextPatch
                 var area = __instance.TextArea;
                 if (area == null) return;
 
-                area.richText = true;              // 解析标签
-                area.overrideColorTags = false;    // ★ 核心：别忽略 <color=...>
+                area.richText = true;
+                area.overrideColorTags = false;
 
                 LightLogger.LogDebug("[ChatRichText] 聊天气泡已开启富文本渲染");
             }
@@ -79,26 +39,6 @@ public static class ChatRichTextPatch
         }
     }
 
-    // =====================================================================
-    //  挂到 AbstractChatInputField.Start
-    //
-    //  ⚠️⚠️ **2026-10-06 严重事故（务必看完再改）**：
-    //    我原来写的是 `[HarmonyPatch(typeof(FreeChatInputField), nameof(FreeChatInputField.Start))]` ——
-    //    **`nameof` 能编译**（Start 是从基类继承来的），但 **Harmony 的 `DeclaredMethod` 只找
-    //    "该类自己声明的"方法**，于是解析失败：
-    // <code>
-    //   [Warning: HarmonyX] AccessTools.DeclaredMethod: Could not find method for type
-    //                       FreeChatInputField and name Start and parameters
-    //   [Error :LightInDark] [LightPlugin.Load] HarmonyException: Patching exception in method null
-    // </code>
-    //    **而 `PatchAll` 是按类循环的 —— 一个类抛异常就中断整个循环**，
-    //    排在 `ChatRichTextPatch` 之后的所有补丁（聊天优化、颜色……）**全部没挂上**。
-    //    用户看到的就是"我整个聊天优化都炸了，渲染按钮啥的全没有，我的一堆颜色也没了"。
-    //
-    //    → **结论：patch 继承来的虚方法时，必须写"声明它的那个类"。**
-    //      这里 `Start` 是 `AbstractChatInputField` 声明的 protected virtual（19.0 源码 L50），
-    //      而 `FreeChatInputField` 只重写了 Awake/SetVisible/Clear/Submit —— 它**没有** Start。
-    // =====================================================================
 
     [HarmonyPatch(typeof(AbstractChatInputField), nameof(AbstractChatInputField.Start))]
     public static class ChatInputStartPatch
@@ -111,11 +51,9 @@ public static class ChatRichTextPatch
             {
                 if (__instance == null) return;
 
-                // ⚠️ 不能用 `is` / `as`（IL2CPP 里对派生类型判断会静默为 false，AGENTS.md §4.2.0）
                 var field = __instance.TryCast<FreeChatInputField>();
-                if (field == null) return;      // 不是大厅那个聊天框（可能是别的输入框），不管
+                if (field == null) return;
 
-                // ① 输入框不渲染富文本 —— 显示原始标签
                 var box = field.GetComponentInChildren<TextBoxTMP>(true);
                 if (box != null && box.outputText != null)
                 {
@@ -123,7 +61,6 @@ public static class ChatRichTextPatch
                     LightLogger.Log("[ChatRichText] 聊天输入框已关闭富文本渲染（显示原始标签）");
                 }
 
-                // ② 建「预览」按钮
                 BuildPreviewButton(field);
             }
             catch (Exception ex)
@@ -132,10 +69,6 @@ public static class ChatRichTextPatch
             }
         }
     }
-
-    // =====================================================================
-    //  预览按钮
-    // =====================================================================
 
     private static void BuildPreviewButton(FreeChatInputField field)
     {
@@ -746,36 +679,11 @@ public static class ChatNoCensorPatch
     }
 }
 
-/// <summary>
-/// **保住富文本标签 —— 绕开原版的正则剥离。**
-///
-/// 用户 2026-10-06，三段诊断定位到精确的一行（`PlayerControl.cs:2616`）：
-/// <code>
-///   public bool RpcSendChat(string chatText)
-///   {
-///       chatText = Regex.Replace(chatText, "&lt;.*?&gt;", string.Empty);   // ★ 把 &lt;...&gt; 全删了
-///       ...
-///   }
-/// </code>
-///  日志实证：② 的 Prefix 在这行**之前**跑 → 看到完整标签；
-///  ③ `AddChat` 拿到的只剩 `M` → **两边完全吻合**。
-///
-///  【做法】用一个**正则碰不到的中转字符**（Unicode 私有使用区 U+E000/U+E001）：
-///    · 进 `RpcSendChat` 前：`&lt;` → U+E000，`&gt;` → U+E001   → 文本里没有 `&lt;` 了，正则无事可做
-///    · 进 `AddChat` 前：   U+E000 → `&lt;`，U+E001 → `&gt;`   → 还原成标签，TMP 正常渲染
-///
-///  **为什么不用 Transpiler 去掉那行**：IL2CPP 下改 IL 风险高得多，
-///  而"编码/解码"只用两个 Prefix 就能达到同样效果，稳定且好回滚。
-///
-///  ⚠️ 私有使用区字符正常输入打不出来（我上一轮已经把那一带在 `IsAllowed` 里挡掉了），
-///     所以不用担心用户手打 U+E000 造成误还原。
-/// </summary>
 public static class ChatRichTextProtect
 {
     private const char Lt = '\uE000';   // 代表 '<'
     private const char Gt = '\uE001';   // 代表 '>'
 
-    /// <summary>发送前：把尖括号换成中转字符，躲过 `Regex.Replace(chatText, "&lt;.*?&gt;", "")`。</summary>
     [HarmonyPatch(typeof(PlayerControl), nameof(PlayerControl.RpcSendChat))]
     public static class EncodeBeforeSend
     {
@@ -797,7 +705,6 @@ public static class ChatRichTextProtect
         }
     }
 
-    /// <summary>显示前：把中转字符还原成尖括号，让 TMP 渲染富文本。</summary>
     [HarmonyPatch(typeof(ChatController), nameof(ChatController.AddChat))]
     public static class DecodeBeforeDisplay
     {

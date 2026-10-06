@@ -72,13 +72,9 @@
 		<ItemGroup>
 			<_ApiDllFromRef Include="@(ReferencePath)" Condition="'%(Filename)' == 'LightInDark'" />
 		</ItemGroup>
-		<Copy SourceFiles="@(_ApiDllFromRef)" DestinationFolder="$(CustomOutDir)"
-		      Condition="'@(_ApiDllFromRef)' != ''"
-		      SkipUnchangedFiles="true" />
+		<Copy SourceFiles="@(_ApiDllFromRef)" DestinationFolder="$(CustomOutDir)" Condition="'@(_ApiDllFromRef)' != ''" SkipUnchangedFiles="true" />
 
-		<Copy SourceFiles="$(ProjectDir)..\Libs\LightInDark.dll" DestinationFolder="$(CustomOutDir)"
-		      Condition="Exists('$(ProjectDir)..\Libs\LightInDark.dll')"
-		      SkipUnchangedFiles="true" />
+		<Copy SourceFiles="$(ProjectDir)..\Libs\LightInDark.dll" DestinationFolder="$(CustomOutDir)" Condition="Exists('$(ProjectDir)..\Libs\LightInDark.dll')" SkipUnchangedFiles="true" />
 
 		<Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(CustomOutDir)" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
 

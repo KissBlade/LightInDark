@@ -1,102 +1,19 @@
 using System;
 using System.Collections.Generic;
-using Il2CppInterop.Runtime.Injection;    // ClassInjector：IL2CPP 下 AddComponent 前必须先注册类型
-using Light.UI.MainMenu;                  // GradientButton —— 自绘「淡金描边 + 半透明深色底」按钮
-using Light.UI.Window;                    // MenuTextTemplate2（简中字体）/ VanillaAsset（白图 / 音效）
-using LightInDark.Core;                   // LightLogger
-using LightInDark.UI.Window;              // LayerExpansion
+using Il2CppInterop.Runtime.Injection;
+using Light.UI.MainMenu;
+using Light.UI.Window;
+using LightInDark.Core;
+using LightInDark.UI.Window;
 using TMPro;
 using UnityEngine;
-using UnityEngine.Events;                 // UnityAction（给原版 PassiveButton 挂监听用）
-using UnityEngine.SceneManagement;        // 判断当前场景，决定窗口挂谁下面
-using MetaScreen = Light.UI.HudUI.MetaScreen;   // ⚠️ Light.UI.Window 里也有个 MetaScreen，必须用别名消歧
+using UnityEngine.Events; 
+using UnityEngine.SceneManagement;
+using MetaScreen = Light.UI.HudUI.MetaScreen;
 
 namespace Light.UI.MusicPlayer;
-
-/// <summary>
-/// **音乐播放器窗口** —— F3 开关，任何场景都能用。
-///
-/// ═══════════════════════════════════════════════════════════════════════
-///  【这一版为什么推翻重写】
-///
-///  上一版是 **Canvas（Screen Space Overlay）+ 自己算鼠标命中**，实机三个问题全中：
-///    ① 中文完全不显示（自己 <c>AddComponent&lt;TextMeshPro&gt;</c> 新建 TMP，字体没接上）；
-///    ② 按钮位置偏（Canvas 参考分辨率换算，实机分辨率和 1920×1080 不一致就偏）；
-///    ③ 点击穿透到游戏自己的按钮（自绘命中判定拦不住原版 <c>PassiveButtonManager</c>）。
-///
-///  现在改成**和「更换背景图」面板（BackgroundPanel）完全相同的那一套**
-///  —— 世界空间 Quad 自绘 + 原版 MetaScreen 窗口 + GradientButton + MenuTextTemplate2，
-///  它在本工程已经实机验证过：字体没问题、位置由 UI 层坐标直接决定（不会因为分辨率偏）、
-///  点击由原版自身的 <c>PassiveButton</c> 处理（和游戏按钮同一套输入链路）。
-///
-///  ═══════════════════════════════════════════════════════════════════════
-///  【抄自 BackgroundPanel 的具体做法】（每一条都是踩过坑才定下来的）
-///
-///  · **窗口** —— <c>Light.UI.HudUI.MetaScreen.GenerateWindow(...)</c>，
-///    <c>background: Modern</c>、<c>withCloseButton: true</c>、<c>sortingGroupOrder: 300</c>，
-///    再把 MetaWindow 的 <c>localScale</c> 缩到 <see cref="PanelScale"/>（内容坐标一个字不用改）。
-///  · **所有色块 / 边框 / 分隔线** —— <c>SpriteRenderer</c> + <c>drawMode = Sliced</c> + <c>size</c> 拉伸，
-///    贴图取 <c>VanillaAsset.FullScreenSprite</c>（自建白图）或
-///    <c>GradientButton.PanelSprite</c>（自绘圆角九宫格，永不失效）。
-///  · **层** —— 每个 <c>new GameObject</c> 都设 <c>LayerExpansion.GetUILayer()</c>（= layer 5）。
-///    这是"大厅里看不见"的根因：layer 0 归 Main Camera（depth −1），会被 UI Camera（depth 99）画的东西整个盖住。
-///  · **同一容器内 z 越小越靠前** —— 底 +0.05、边框 +0.03、文字/按钮 −0.10。
-///  · **整窗压过其它 UI** —— MetaScreen 会给 MetaWindow 挂 <c>SortingGroup(order = 300)</c>。
-///  · **点击不穿透** —— <see cref="UiModalGuard"/>：每帧把"不属于本窗口"的原版控件临时禁用 +
-///    <c>InstallOutsideClickGuard</c> 在窗口**矩形之外**铺四条带状碰撞盒（见下方注释）。
-///  · **字体** —— <c>MenuTextTemplate2.Font / FontMaterial</c>（NotoSansSC），
-///    并且**建完之后再统一刷一遍**（<see cref="ApplyCjkFontToAll"/>），双保险。
-///  · **不写任何 Harmony 补丁** —— F3 在本组件 <see cref="Update"/> 里轮询。
-///
-///  ═══════════════════════════════════════════════════════════════════════
-///  【布局】（用户授权自定；见类末尾的 ASCII 图）
-/// <code>
-/// ┌──────────────────────────────────────────────────────────────┐
-/// │ 音乐播放器                  正在播放xxx  1:00 / 2:30         │
-/// │ ──────────────────────────────────────────────────────────── │
-/// │ ┌──────────────┐ ┃ ┌──────────────────────────────────────┐   │
-/// │ │打开配置文件夹 │ ┃ │ 01. 曲目一                            │   │
-/// │ │  刷新列表     │ ┃ │ 02. 曲目二                            │   │
-/// │ │ 曲库：N 首    │ ┃ │ …（8 行，一页正好一屏）                │   │
-/// │ │ 把歌曲放进    │ ┃ └──────────────────────────────────────┘   │
-/// │ │ Music 文件夹  │ ┃  [上一页]   第 1 / 1 页   [下一页]          │
-/// │ │ 支持 mp3/…    │ ┃  [暂停][播放][下一首]   [ 列表循环 ]        │
-/// │ │[−]音量 70%[+] │ ┃                                            │
-/// │ │[━━━━━●───────]│ ┃                                            │
-/// │ │  关闭窗口     │ ┃                                            │
-/// │ └──────────────┘ ┃                                            │
-/// └──────────────────────────────────────────────────────────────┘
-/// </code>
-///
-///  ⚠️ 2026-10-05 二次调整（用户要求）：
-///    · 删掉了左栏原来那行 **「按 F3 也可开关窗口」**（F3 本来就能开关，这行既多余、字又小）；
-///    · 腾出来的位置放**音量控件**：一行读数（`音量 70%` + 左右各一个 `-` / `+` 步进按钮）
-///      + 一行**可拖动的音量条**（占满左栏宽度 2.45）。
-///    · 音量条是**自绘**的，不是原版设置界面那条 —— 为什么，见
-///      <see cref="BuildVolumeControl"/> 的长注释（结论：原版 <c>SlideBar</c> 拿模板要满场景找
-///      非单例的 <c>OptionsMenuBehaviour</c>、克隆体会带上写游戏音量的持久化监听、
-///      而且它的拖动换算是"世界坐标差当 localPosition"与缩过的窗口对不上 → 不稳妥）。
-///
-///  ⚠️ 2026-10-05 另外两条追加需求（同一位用户，一起做）：
-///    · **右上角状态行加时间进度** —— `未在播放` / `正在播放{曲名}  1:00 / 2:30`，
-///      数据来自新增的 <c>MusicPlayer.Position / Duration</c>（见 <see cref="BuildStatus"/>）。
-///    · **播放器在播 + 玩家在主界面 → 压住原版主界面 BGM**（`Ambience/MainMenuBgMusic`），
-///      随时可还原（见 <see cref="TickMainMenuBgm"/> 的长注释，那里写了为什么没照抄
-///      <c>BackgroundRenderer.MuteVanillaMusic</c> 的全局 mixer 通道做法）。
-///
-///  ⚠️ 控制行（<see cref="CtrlY"/>）现在是**四个中文文字按钮**：
-///     `暂停` / `播放` / `下一首` / 循环模式（`随机播放`|`列表循环`|`单曲循环`）。
-///     2026-10-05 用户要求：**不要 Unicode 符号**（▶ ❚❚ 在 NotoSansSC 里字形覆盖不稳，
-///     用户原话"那个按钮标签文本看起来是真不行"），全部改汉字。
-///     宽度按"每个全角字 ≈ 0.517 × fontSize"算（ModeBtnWidth=3.00 时 1.45 号四个字正好排满），
-///     合计 6.07 ≤ 右栏宽度 6.10（见 <see cref="CtrlRowWidthUsed"/>）。
-/// </summary>
 public sealed class MusicPlayerWindow : MonoBehaviour
 {
-    // =====================================================================
-    //  布局常量（单位 = 窗口本地坐标；MetaWindow 自身再乘 PanelScale）
-    //    坐标原点在窗口中心，+x 向右、+y 向上。
-    // =====================================================================
 
     /// <summary>窗口尺寸（和 BackgroundPanel 的 10.0×6.6 同一量级，缩小后不会超出屏幕）。</summary>
     private static readonly Vector2 WindowSize = new(9.2f, 5.2f);

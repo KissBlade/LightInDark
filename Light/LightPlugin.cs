@@ -56,12 +56,9 @@ public partial class LightPlugin : BasePlugin
         {
             StaticLog = Log; // BepInEx日志
 
-            // 职业立绘加载钩子（API 不能引用主插件的 ResourceHelper，所以走委托注入）
             try
             {
-                LightInDark.Roles.RoleTemplate.RoleImageLoader =
-                    path => Light.Utilities.ResourceHelper.LoadSprite(
-                        path, LightInDark.Roles.RoleTemplate.RoleImagePPU);
+                RoleTemplate.RoleImageLoader = path => ResourceHelper.LoadSprite(path, RoleTemplate.RoleImagePPU);
             }
             catch { }
 
@@ -72,9 +69,9 @@ public partial class LightPlugin : BasePlugin
                 LightLogger.BepInExError = m => Log.LogError(m);
             }
             catch { }
-            try { Light.Diagnostics.ExceptionStackLogger.Hook(); } catch { }
+            try { Diagnostics.ExceptionStackLogger.Hook(); } catch { }
 
-            LightSettingsData = LightSettings.LoadSettingData(); // 存设置（必须在 PatchAll 之前）
+            LightSettingsData = LightSettings.LoadSettingData();
 
             Harmony.PatchAll(); // 鸿蒙
             // CurrentModRegistration.ModRegistrationGuidString = ModGuid;   // [禁用-MCI]
@@ -93,10 +90,6 @@ public partial class LightPlugin : BasePlugin
             LoadRole(); // 加载职业
             RoleConfigRegistrar.Register();   // 职业配置块 + 职业专属项
 
-            // 预设：必须在**所有配置块注册完之后**初始化 ——
-            //   Initialize 会把当时已有的项全挂上"变了就异步写 Current.lidpreset"，
-            //   来晚一步就会漏掉前面注册的那些。
-            //   （之后新增的项由 ConfigRegistry.Register → PresetStore.HookItem 兜住。）
             try { LightInDark.Configuration.PresetStore.Initialize(); }
             catch (Exception ex) { LightLogger.LogError("[LightPlugin] PresetStore 初始化失败", ex); }
 
@@ -109,18 +102,14 @@ public partial class LightPlugin : BasePlugin
             RegisterShowModStampOnMainMenu(); // MOD STAMPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
             // 跨场景常驻的每帧驱动器
-            try { Light.Utilities.LightTicker.Ensure(); } catch { }
+            try { LightTicker.Ensure(); } catch { }
 
             // 依赖库释放
-            try { Light.Audio.NativeLibraryLoader.PrepareBass(); } catch { }
+            try { Audio.NativeLibraryLoader.PrepareBass(); } catch { }
 
-            // emoji / 符号字体 fallback（让聊天框能显示 😡👍 和特殊符号）
-            //   ⚠️ 和 RichTextInputPatch.IsCharAllowedPatch 是一对：
-            //      前者放开"能不能输入"，这里解决"能不能画出来"。
-            try { Light.Patches.RichTextInputPatch.SetupEmojiFallback(); } catch { }
+            //try { RichTextInputPatch.SetupEmojiFallback(); } catch { }
 
-            // BASS 播放器宿主
-            try { Light.Audio.BassMusicPlayer.Ensure(); } catch { }
+            try { Audio.BassMusicPlayer.Ensure(); } catch { }
             ChatHistoryLogUtils.Init(); // 聊天历史记录。
 
             // 握手验证暂停 2026-09-26

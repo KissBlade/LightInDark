@@ -358,6 +358,11 @@ public class GUIButton : NoSGUIText
             if (OnMouseOut != null)
                 passiveButton.OnMouseOut.AddListener((UnityAction)(() => OnMouseOut(clickable)));
 
+            // 点击音效：框架按钮统一在这里发声（H 菜单的页签/职业/搜索结果按钮、职业页、预设窗等都走 GUIButton）。
+            // 只给"真的有点击行为"的按钮发声；用缓存版 helper，避免每次点击都全量搜索音效资源。
+            if (OnClick != null || OnRightClick != null)
+                passiveButton.OnClick.AddListener((UnityAction)(() => VanillaAsset.PlayUiSelect()));
+
             actualSize.Width += margin + 0.1f;
             actualSize.Height += margin + 0.1f;
 
